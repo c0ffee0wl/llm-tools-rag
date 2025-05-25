@@ -1,7 +1,7 @@
 [project]
 name = "llm-tools-rag"
 version = "0.1.0"
-description = "Add your description here"
+description = "A tool plugin for LLM to enable searching over embeddings"
 readme = "README.md"
 license = "MIT"
 authors = [
