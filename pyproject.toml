@@ -20,7 +20,7 @@ llm_tools_rag = "llm_tools_rag"
 requires = ["setuptools"]
 build-backend = "setuptools.build_meta"
 
-[dependency-groups]
+[project.optional-dependencies]
 test = [
     "pytest>=8.3.5",
 ]
