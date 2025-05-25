@@ -296,7 +296,7 @@ dependencies = [
 ]
 
 [package.dev-dependencies]
-tests = [
+test = [
     { name = "pytest" },
 ]
 
@@ -307,7 +307,7 @@ requires-dist = [
 ]
 
 [package.metadata.requires-dev]
-tests = [{ name = "pytest", specifier = ">=8.3.5" }]
+test = [{ name = "pytest", specifier = ">=8.3.5" }]
 
 [[package]]
 name = "openai"
