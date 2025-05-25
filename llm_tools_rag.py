@@ -1,11 +1,12 @@
 from dataclasses import asdict
+from typing import Optional
 
 import llm
 from llm import user_dir
 from sqlite_utils import Database
 
 
-def get_collections(database: str | None = None):
+def get_collections(database: Optional[str] = None):
     """Retrieve all collection names from the embeddings database.
 
     Args:
@@ -28,7 +29,7 @@ def get_collections(database: str | None = None):
 
 
 def get_relevant_documents(
-    query: str, collection_name: str, database: str | None = None, number: int = 3
+    query: str, collection_name: str, database: Optional[str] = None, number: int = 3
 ) -> list[dict]:
     """Find items in a collection that are similar to the given query.
 
