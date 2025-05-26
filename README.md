@@ -17,7 +17,7 @@ llm install llm-tools-rag
 
 ## Usage
 
-Use `-T RAG` to enable the RAG tools.
+Use `-T RAG` to enable the RAG tools. You can specify a non-default database with `-T RAG("other_db.db")`.
 
 
 ```bash
