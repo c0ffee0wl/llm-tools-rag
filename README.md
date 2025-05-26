@@ -17,11 +17,11 @@ llm install llm-tools-rag
 
 ## Usage
 
-Use `-T get_collection -T get_relevant_documents` to enable the RAG tools.
+Use `-T RAG` to enable the RAG tools.
 
 
 ```bash
-llm -m claude-4-sonnet -T get_collections -T get_relevant_documents "what are the available plugin hooks in llm?"
+llm -m claude-4-sonnet -T RAGTools "what are the available plugin hooks in llm?"
 ```
 
 ## Development

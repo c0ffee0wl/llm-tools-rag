@@ -262,7 +262,7 @@ wheels = [
 
 [[package]]
 name = "llm"
-version = "0.26a0"
+version = "0.26a1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "click", version = "8.1.8", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
@@ -281,9 +281,9 @@ dependencies = [
     { name = "sqlite-migrate" },
     { name = "sqlite-utils" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/3f/dd/177ef725e6a7e0da14e316991a2198503ce851edeef307609ae5072a8b39/llm-0.26a0.tar.gz", hash = "sha256:66676fcc6542b9070af37cb57097e64e10892bb80b9498b62be06ad3118ffad3", size = 64902, upload_time = "2025-05-14T00:40:42.832Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/d0/6c/fc342e58822bdbf852a0816bc23bd924895afef17119b1e5f723ee8e2bd1/llm-0.26a1.tar.gz", hash = "sha256:98911926c28959953a3eea5109ffa3f48969165672fdc0c924edc78a1c0a3521", size = 79603, upload_time = "2025-05-26T06:13:43.209Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/15/3c/681b0a07c7802540c057bee8449ae193bdacf166a674f78e6c69f3acd163/llm-0.26a0-py3-none-any.whl", hash = "sha256:927e7413b73c4aa590aba6f8361dfc39c36dc057ddffc58b995f87d750328e16", size = 66417, upload_time = "2025-05-14T00:40:41.081Z" },
+    { url = "https://files.pythonhosted.org/packages/63/f6/5c62686867772beed7c1c1617ecae66b8819913987ecec46bb62114192d4/llm-0.26a1-py3-none-any.whl", hash = "sha256:b8e0b24e34dc49b6870107b420378ee83d1bd785eae7230bc36bcb2be85af4ff", size = 76780, upload_time = "2025-05-26T06:13:41.307Z" },
 ]
 
 [[package]]
@@ -295,19 +295,18 @@ dependencies = [
     { name = "sqlite-utils" },
 ]
 
-[package.dev-dependencies]
+[package.optional-dependencies]
 test = [
     { name = "pytest" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "llm", specifier = "==0.26a0" },
+    { name = "llm", specifier = "==0.26a1" },
+    { name = "pytest", marker = "extra == 'test'", specifier = ">=8.3.5" },
     { name = "sqlite-utils", specifier = ">=3.38" },
 ]
-
-[package.metadata.requires-dev]
-test = [{ name = "pytest", specifier = ">=8.3.5" }]
+provides-extras = ["test"]
 
 [[package]]
 name = "openai"
