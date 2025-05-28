@@ -27,13 +27,13 @@ def db_with_collections(temp_db):
 
 
 def test_get_collections(db_with_collections):
-    result = RAG().get_collections(database=db_with_collections)
+    result = RAG(database=db_with_collections).get_collections()
     assert result == ["collection1", "collection2"]
 
 
 def test_get_collections_no_table(temp_db):
     with pytest.raises(RuntimeError, match="No collections database found"):
-        RAG().get_collections(database=temp_db)
+        RAG(database=temp_db).get_collections()
 
 
 @patch("llm_tools_rag.llm.Collection")
@@ -44,8 +44,8 @@ def test_get_relevant_documents(mock_collection_class, db_with_collections):
     mock_collection.similar.return_value = [mock_entry]
 
     with patch("llm_tools_rag.asdict", return_value={"id": "1", "content": "test"}):
-        result = RAG().get_relevant_documents(
-            "query", "collection1", db_with_collections, number=5
+        result = RAG(database=db_with_collections).get_relevant_documents(
+            "query", "collection1", number=5
         )
 
         mock_collection.similar.assert_called_once_with("query", number=5)
@@ -54,4 +54,4 @@ def test_get_relevant_documents(mock_collection_class, db_with_collections):
 
 def test_get_relevant_documents_no_table(temp_db):
     with pytest.raises(RuntimeError, match="No collections database found"):
-        RAG().get_relevant_documents("query", "collection1", temp_db)
+        RAG(database=temp_db).get_relevant_documents("query", "collection1")
