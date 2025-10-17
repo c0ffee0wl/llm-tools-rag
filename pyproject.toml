@@ -1,6 +1,6 @@
 [project]
 name = "llm-tools-rag"
-version = "0.1.0"
+version = "0.1.1"
 description = "A tool plugin for LLM to enable searching over embeddings"
 readme = "README.md"
 license = "MIT"
@@ -9,7 +9,7 @@ authors = [
 ]
 requires-python = ">=3.9"
 dependencies = [
-    "llm==0.26",
+    "llm",
     "sqlite-utils>=3.38",
 ]
 
