@@ -91,15 +91,24 @@ class RAGEngine:
         # Get embedding model with consistency check
         # Priority: override > global config > llm default
         model_id = self.embedding_model_override or self.config.get_embedding_model()
+        if not model_id:
+            # Fall back to llm's default embedding model
+            model_id = llm.get_default_embedding_model()
+
+        if not model_id:
+            raise ValueError(
+                "No embedding model available. Configure one with:\n"
+                "  llm embed-models default <model>  # Set default\n"
+                "  llm keys set <provider>           # Set API key\n"
+                "Or specify a model with --model. See: llm embed-models list"
+            )
+
         try:
-            if model_id:
-                self.embedding_model = llm.get_embedding_model(model_id)
-            else:
-                self.embedding_model = llm.get_embedding_model()
+            self.embedding_model = llm.get_embedding_model(model_id)
         except Exception as e:
             raise ValueError(
-                "No embedding model available. Configure one with 'llm keys set <provider>' "
-                "or specify a model with --model. See: llm embed-models list"
+                f"Failed to load embedding model '{model_id}'. "
+                "Check API keys and model availability."
             ) from e
 
         # Check embedding model consistency with existing collection
