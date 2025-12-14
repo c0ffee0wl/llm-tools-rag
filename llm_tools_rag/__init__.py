@@ -239,3 +239,110 @@ def register_tools(register):
 
 
 __version__ = "0.1.0"
+
+# =============================================================================
+# Library API - High-level functions for external consumers (e.g., llm-assistant)
+# =============================================================================
+
+__all__ = [
+    # Tool class
+    'RAGTool',
+    # Library API for external consumers
+    'search_collection',
+    'add_to_collection',
+    'get_collection_list',
+    'collection_exists',
+    'get_collection_stats',
+    'rebuild_collection_index',
+    'remove_collection',
+]
+
+
+def search_collection(
+    collection: str,
+    query: str,
+    top_k: int = 5,
+    mode: str = "hybrid"
+) -> List[Dict[str, Any]]:
+    """
+    Search a RAG collection. Returns list of results.
+
+    Args:
+        collection: Name of the collection to search
+        query: Search query string
+        top_k: Number of results to return (default: 5)
+        mode: Search mode - "hybrid" (default), "vector", or "keyword"
+
+    Returns:
+        List of result dicts with: id, content, metadata (source, chunk_index, etc.)
+    """
+    engine = get_or_create_engine(collection)
+    return engine.search(query, top_k=top_k, mode=mode)
+
+
+def add_to_collection(
+    collection: str,
+    path: str,
+    refresh: bool = False,
+    model: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Add document(s) to a collection. Creates collection if needed.
+
+    Args:
+        collection: Collection name
+        path: File path, git:url, or glob pattern
+        refresh: Force reindex if document exists
+        model: Optional embedding model override
+
+    Returns:
+        Dict with status, chunks count, errors
+    """
+    engine = get_or_create_engine(collection, model)
+    return engine.add_document(path, refresh=refresh)
+
+
+def get_collection_list() -> List[Dict[str, Any]]:
+    """
+    List all collections with metadata.
+
+    Returns:
+        List of dicts with: name, chunks, documents
+    """
+    names = list_collections()
+    result = []
+    for name in names:
+        try:
+            engine = get_or_create_engine(name)
+            stats = engine.get_stats()
+            result.append({
+                'name': name,
+                'chunks': stats['total_chunks'],
+                'documents': stats['unique_documents']
+            })
+        except Exception:
+            result.append({'name': name, 'chunks': '?', 'documents': '?'})
+    return result
+
+
+def collection_exists(name: str) -> bool:
+    """Check if a collection exists."""
+    return name in list_collections()
+
+
+def get_collection_stats(collection: str) -> Dict[str, Any]:
+    """Get detailed statistics for a collection."""
+    engine = get_or_create_engine(collection)
+    return engine.get_stats()
+
+
+def rebuild_collection_index(collection: str) -> None:
+    """Rebuild a collection's BM25 index."""
+    engine = get_or_create_engine(collection)
+    engine.rebuild_index()
+
+
+def remove_collection(collection: str) -> None:
+    """Delete a collection and all its data."""
+    engine = get_or_create_engine(collection)
+    engine.delete_collection()
