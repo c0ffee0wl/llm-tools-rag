@@ -20,7 +20,8 @@ from dataclasses import dataclass
 # $1 = input file, $2 = output file (optional, for loaders that can't use stdout)
 # If loader outputs JSON array of {path, contents}, creates multiple documents
 DEFAULT_LOADERS: Dict[str, str] = {
-    # Git loader: yek with jq transform to aichat format (matches aichat exactly)
+    # Git loader: defined for compatibility but actually uses built-in Python implementation
+    # (supports remote URLs via clone + yek, local paths via direct yek)
     "git": """sh -c "yek $1 --json | jq '[.[] | { path: .filename, contents: .content }]'" """,
     "pdf": "pdftotext $1 -",
     "docx": "pandoc --to plain $1",
@@ -152,26 +153,29 @@ class DocumentLoader:
         """
         Load documents via protocol, supporting JSON array output for multiple documents.
 
-        Like aichat, if loader outputs JSON array of {path, contents}, creates a separate
-        LoadedDocument for each item. Otherwise returns single document.
+        Supports two JSON formats:
+        - aichat format: {path, contents} (from external loaders with jq transform)
+        - yek native format: {filename, content} (from direct yek calls)
 
-        The git loader uses jq to transform yek's {filename, content} format to
-        aichat's {path, contents} format, so we only need to handle one format.
+        If loader outputs JSON array in either format, creates a separate
+        LoadedDocument for each item. Otherwise returns single document.
         """
         import json
 
         raw_output = self._load_via_protocol_raw(protocol, path)
 
-        # Try to parse as JSON array of documents (aichat format: {path, contents})
+        # Try to parse as JSON array of documents
         try:
             data = json.loads(raw_output)
             if isinstance(data, list) and len(data) > 0:
                 documents = []
                 for item in data:
                     if isinstance(item, dict):
-                        # Primary: aichat format {path, contents} (jq transforms yek to this)
-                        doc_path = item.get('path')
-                        doc_content = item.get('contents')
+                        # Support both formats:
+                        # 1. aichat format: {path, contents}
+                        # 2. yek native format: {filename, content}
+                        doc_path = item.get('path') or item.get('filename')
+                        doc_content = item.get('contents') or item.get('content')
                         if doc_path and doc_content:
                             # Prefix path with protocol if not already prefixed
                             if not doc_path.startswith(full_path):
@@ -196,12 +200,78 @@ class DocumentLoader:
             parts.append(f"=== {doc.path} ===\n{doc.content}")
         return "\n\n".join(parts)
 
+    def _is_remote_git_url(self, path: str) -> bool:
+        """Check if path is a remote git URL."""
+        return (path.startswith('http://') or
+                path.startswith('https://') or
+                path.startswith('git@'))
+
+    def _load_git_repo(self, path: str) -> str:
+        """
+        Load git repository content using yek.
+        For remote URLs, clones to temp dir first.
+        Returns JSON array of {filename, content} objects.
+        """
+        import tempfile
+        import json
+
+        if self._is_remote_git_url(path):
+            # Clone to temp directory, run yek, clean up
+            with tempfile.TemporaryDirectory(prefix='rag-git-') as temp_dir:
+                clone_path = os.path.join(temp_dir, 'repo')
+
+                # Clone with depth=1 for speed
+                clone_cmd = ['git', 'clone', '--depth', '1', '--single-branch', path, clone_path]
+                try:
+                    subprocess.run(
+                        clone_cmd,
+                        capture_output=True,
+                        text=True,
+                        check=True,
+                        timeout=300  # 5 min timeout for large repos
+                    )
+                except subprocess.CalledProcessError as e:
+                    raise ValueError(f"Failed to clone git repository: {e.stderr}")
+                except subprocess.TimeoutExpired:
+                    raise ValueError(f"Git clone timed out after 5 minutes: {path}")
+
+                # Run yek on the cloned repo
+                return self._run_yek_json(clone_path)
+        else:
+            # Local path - run yek directly
+            return self._run_yek_json(path)
+
+    def _run_yek_json(self, local_path: str) -> str:
+        """Run yek with --json on a local path."""
+        if not shutil.which('yek'):
+            raise ValueError(
+                "yek command not found. Install with: cargo install yek"
+            )
+
+        try:
+            result = subprocess.run(
+                ['yek', local_path, '--json'],
+                capture_output=True,
+                text=True,
+                check=True,
+                timeout=300
+            )
+            return result.stdout
+        except subprocess.CalledProcessError as e:
+            raise ValueError(f"yek failed: {e.stderr}")
+        except subprocess.TimeoutExpired:
+            raise ValueError(f"yek timed out after 5 minutes")
+
     def _load_via_protocol_raw(self, protocol: str, path: str) -> str:
         """Run loader command and return raw output."""
         import tempfile
 
         if protocol not in self.loaders:
             raise ValueError(f"No loader configured for protocol: {protocol}")
+
+        # Special handling for git protocol - use yek with clone support
+        if protocol == 'git':
+            return self._load_git_repo(path)
 
         # Get command template and build safe argument list
         cmd_template = self.loaders[protocol]
