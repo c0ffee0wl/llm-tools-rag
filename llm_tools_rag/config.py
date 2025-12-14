@@ -39,7 +39,7 @@ def deep_merge(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]
 # Default configuration matching aichat's structure
 DEFAULT_CONFIG = {
     "embedding_model": None,  # Will use llm's default embedding model
-    "chunk_size": 1000,
+    "chunk_size": 2000,
     "chunk_overlap": 200,
     "top_k": 5,
     "search_mode": "hybrid",  # vector | keyword | hybrid
