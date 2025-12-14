@@ -1,26 +1,33 @@
 [project]
 name = "llm-tools-rag"
-version = "0.1.1"
-description = "A tool plugin for LLM to enable searching over embeddings"
+version = "0.1.0"
+description = "Advanced RAG (Retrieval-Augmented Generation) plugin for LLM with hybrid search"
 readme = "README.md"
-license = "MIT"
-authors = [
-    { name = "Dan Turkel", email = "daturkel@gmail.com" }
-]
-requires-python = ">=3.9"
+license = {text = "Apache-2.0"}
+authors = [{name = "c0ffee0wl"}]
+requires-python = ">=3.10"
 dependencies = [
-    "llm",
-    "sqlite-utils>=3.38",
+    "llm>=0.17",
+    "chromadb>=0.5.0",
+    "rank-bm25>=0.2.2",
+    "pyyaml>=6.0",
+    "requests>=2.28",
+    "beautifulsoup4>=4.11",
 ]
 
 [project.entry-points.llm]
-llm_tools_rag = "llm_tools_rag"
+rag = "llm_tools_rag"
 
 [build-system]
-requires = ["setuptools"]
+requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project.optional-dependencies]
 test = [
-    "pytest>=8.3.5",
+    "pytest>=7.0",
+    "pytest-asyncio>=0.21.0",
 ]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["llm_tools_rag*"]

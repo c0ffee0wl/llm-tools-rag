@@ -1,52 +1,100 @@
 # llm-tools-rag
 
-A tool plugin for [LLM](https://llm.datasette.io/) that allows you to search over your embedding collections.
+Advanced RAG (Retrieval-Augmented Generation) plugin for [llm](https://github.com/simonw/llm) with hybrid search capabilities.
 
-[![PyPI](https://img.shields.io/pypi/v/llm-tools-rag.svg)](https://pypi.org/project/llm-tools-rag/)
-[![Changelog](https://img.shields.io/github/v/release/daturkel/llm-tools-rag?include_prereleases&label=changelog)](https://github.com/daturkel/llm-tools-rag/releases)
-[![Tests](https://github.com/daturkel/llm-tools-rag/actions/workflows/test.yml/badge.svg)](https://github.com/daturkel/llm-tools-rag/actions/workflows/test.yml)
-[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](https://github.com/daturkel/llm-tools-rag/blob/main/LICENSE)
+## Features
+
+- **Hybrid Search**: Combines vector similarity (HNSW) with keyword search (BM25) using Reciprocal Rank Fusion
+- **High Performance**: ChromaDB's 2025 Rust-core for fast vector operations
+- **Protocol-Based Loaders**: Support for `git:`, PDF, DOCX, and more
+- **Smart Chunking**: Language-aware text splitting with configurable size and overlap
+- **Deduplication**: SHA256-based content deduplication
+- **Per-Collection Config**: YAML-based configuration per RAG collection
 
 ## Installation
 
-Install this plugin in the same environment as [LLM](https://llm.datasette.io/):
-
 ```bash
-llm install llm-tools-rag
+# Install via pip
+pip install llm-tools-rag
+
+# Or install in development mode
+cd llm-tools-rag
+llm install -e .
 ```
 
 ## Usage
 
-Use `-T RAG` to enable the RAG tools. You can specify a non-default database with `-T RAG("other_db.db")`.
-
-
-```bash
-llm -m claude-4-sonnet -T RAGTools "what are the available plugin hooks in llm?"
-```
-
-## Development
-
-To set up this plugin locally, first checkout the code. Then create a new virtual environment:
+### Command-Line Operations
 
 ```bash
-cd llm-tools-rag
-python -m venv venv
-source venv/bin/activate
+# Add documents to collection
+llm rag add my-docs git:https://github.com/simonw/llm
+llm rag add my-docs ~/documents/manual.pdf
+
+# Search collection
+llm rag search my-docs "how do I install plugins?"
+
+# List documents
+llm rag info my-docs
 ```
 
-Install the dependencies and test dependencies:
+### Tool Mode (within LLM conversation)
 
 ```bash
-pip install -e '.[test]'
+llm --tool rag --tool-option collection my-docs "explain the plugin system"
 ```
 
-To run the tests:
+### Additional Commands
 
 ```bash
-pytest
+# Rebuild BM25 index
+llm rag rebuild my-docs
+
+# Delete collection
+llm rag delete my-docs
+
+# List all collections
+llm rag list
+
+# Check loader dependencies
+llm rag check-deps
 ```
 
-## Dependencies
+## Document Loaders
 
-- [llm](https://llm.datasette.io/): The LLM CLI tool this plugin extends
-- [sqlite-utils](https://sqlite-utils.datasette.io/en/stable/): For querying LLM's sqlite databases
+Supports protocol-based loading:
+
+- `git:/path/or/url` - Use yek to extract repository contents
+- `*.pdf` - Extract text via pdftotext
+- `*.docx` - Extract text via pandoc
+- Plain text files - Direct reading
+
+## Configuration
+
+Per-collection config stored in `~/.config/io.datasette.llm/rag/<collection>/config.yaml`:
+
+```yaml
+embedding_model: "azure/text-embedding-3-small"
+chunk_size: 1000
+chunk_overlap: 200
+top_k: 5
+search_mode: "hybrid"  # vector | keyword | hybrid
+rrf_k: 60
+vector_weight: 0.7
+keyword_weight: 0.3
+document_loaders:
+  git: "yek $1"
+  pdf: "pdftotext $1 -"
+  docx: "pandoc --to plain $1"
+```
+
+## Architecture
+
+- **Vector Store**: ChromaDB with HNSW indexing
+- **Keyword Search**: rank-bm25 for BM25 scoring
+- **Fusion**: Reciprocal Rank Fusion (RRF) to combine rankings
+- **Storage**: Persistent collections with metadata
+
+## License
+
+Apache-2.0
