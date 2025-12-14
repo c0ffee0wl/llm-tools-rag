@@ -176,66 +176,67 @@ def register_commands(cli):
         start_repl(collection)
 
 
+class RAGTool(llm.Toolbox):
+    """Search indexed document collections using hybrid semantic+keyword search."""
+
+    name = "rag"
+
+    def __init__(self, collection: str, top_k: int = 5, mode: str = "hybrid"):
+        """
+        Args:
+            collection: Name of the RAG collection to search (REQUIRED)
+            top_k: Number of results to return (default: 5)
+            mode: Search mode - "hybrid" (default), "vector", or "keyword"
+        """
+        self.collection = collection
+        self.top_k = top_k
+        self.mode = mode
+
+    def search(self, query: str) -> str:
+        """
+        Search indexed documents. Use when user asks to search their docs/codebase.
+
+        IMPORTANT: Do NOT use this tool unless the user explicitly asks to:
+        - "search my docs for...", "what do my notes say about..."
+        - "find in my codebase...", "where is X defined?"
+        - "look up in [collection name]..."
+
+        Do NOT use for:
+        - General knowledge questions you can answer from training data
+        - Web searches (use search_google instead)
+        - Real-time/current information not in indexed documents
+
+        Args:
+            query: Search query - be specific for better results.
+                   Examples: "authentication flow", "def search_", "RAGEngine"
+
+        Returns:
+            Numbered document excerpts with source paths, or "No relevant documents found."
+        """
+        try:
+            engine = get_or_create_engine(self.collection)
+            results = engine.search(query, top_k=self.top_k, mode=self.mode)
+
+            if not results:
+                return "No relevant documents found."
+
+            # Format results for LLM consumption
+            formatted = []
+            for i, result in enumerate(results, 1):
+                source = result['metadata'].get('source', 'unknown')
+                content = result['content']
+                formatted.append(f"[Document {i} - {source}]\n{content}")
+
+            return "\n\n".join(formatted)
+
+        except Exception as e:
+            return f"Error searching RAG collection: {e}"
+
+
 @llm.hookimpl
 def register_tools(register):
     """Register RAG as an LLM tool."""
-
-    @register
-    class RAGTool:
-        """Search indexed document collections using hybrid semantic+keyword search."""
-
-        name = "rag"
-
-        def __init__(self, collection: str, top_k: int = 5, mode: str = "hybrid"):
-            """
-            Args:
-                collection: Name of the RAG collection to search (REQUIRED)
-                top_k: Number of results to return (default: 5)
-                mode: Search mode - "hybrid" (default), "vector", or "keyword"
-            """
-            self.collection = collection
-            self.top_k = top_k
-            self.mode = mode
-
-        def __call__(self, query: str) -> str:
-            """
-            Search indexed documents. Use when user asks to search their docs/codebase.
-
-            IMPORTANT: Do NOT use this tool unless the user explicitly asks to:
-            - "search my docs for...", "what do my notes say about..."
-            - "find in my codebase...", "where is X defined?"
-            - "look up in [collection name]..."
-
-            Do NOT use for:
-            - General knowledge questions you can answer from training data
-            - Web searches (use search_google instead)
-            - Real-time/current information not in indexed documents
-
-            Args:
-                query: Search query - be specific for better results.
-                       Examples: "authentication flow", "def search_", "RAGEngine"
-
-            Returns:
-                Numbered document excerpts with source paths, or "No relevant documents found."
-            """
-            try:
-                engine = get_or_create_engine(self.collection)
-                results = engine.search(query, top_k=self.top_k, mode=self.mode)
-
-                if not results:
-                    return "No relevant documents found."
-
-                # Format results for LLM consumption
-                formatted = []
-                for i, result in enumerate(results, 1):
-                    source = result['metadata'].get('source', 'unknown')
-                    content = result['content']
-                    formatted.append(f"[Document {i} - {source}]\n{content}")
-
-                return "\n\n".join(formatted)
-
-            except Exception as e:
-                return f"Error searching RAG collection: {e}"
+    register(RAGTool)
 
 
 __version__ = "0.1.0"
