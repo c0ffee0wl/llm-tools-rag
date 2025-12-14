@@ -47,9 +47,15 @@ DEFAULT_CONFIG = {
     "vector_weight": 0.7,
     "keyword_weight": 0.3,
     "document_loaders": {
-        "git": "yek $1",
+        # Git loader: yek with jq transform to aichat format (matches aichat exactly)
+        "git": """sh -c "yek $1 --json | jq '[.[] | { path: .filename, contents: .content }]'" """,
         "pdf": "pdftotext $1 -",
         "docx": "pandoc --to plain $1",
+        "odt": "pandoc --to plain $1",
+        "rtf": "pandoc --to plain $1",
+        "epub": "pandoc --to plain $1",
+        "rst": "pandoc --to plain $1",
+        "org": "pandoc --to plain $1",
     },
 }
 

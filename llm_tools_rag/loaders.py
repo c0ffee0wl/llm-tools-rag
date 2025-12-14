@@ -9,17 +9,27 @@ import shutil
 import shlex
 import re
 import time
+import os
 from typing import Dict, Optional, List, Tuple
 from pathlib import Path
-from urllib.parse import urlparse, urljoin
+from urllib.parse import urlparse, urljoin, urldefrag
 from dataclasses import dataclass
 
 
 # Default document loaders (matches aichat configuration)
+# $1 = input file, $2 = output file (optional, for loaders that can't use stdout)
+# If loader outputs JSON array of {path, contents}, creates multiple documents
 DEFAULT_LOADERS: Dict[str, str] = {
-    "git": "yek $1",
+    # Git loader: yek with jq transform to aichat format (matches aichat exactly)
+    "git": """sh -c "yek $1 --json | jq '[.[] | { path: .filename, contents: .content }]'" """,
     "pdf": "pdftotext $1 -",
     "docx": "pandoc --to plain $1",
+    # Additional formats supported by pandoc
+    "odt": "pandoc --to plain $1",    # OpenDocument Text
+    "rtf": "pandoc --to plain $1",    # Rich Text Format
+    "epub": "pandoc --to plain $1",   # E-book format
+    "rst": "pandoc --to plain $1",    # reStructuredText
+    "org": "pandoc --to plain $1",    # Org-mode
 }
 
 # Browser-like User-Agent for web requests (avoids blocks from python-requests default)
@@ -58,6 +68,10 @@ class DocumentLoader:
         """Check if path is a recursive URL pattern (contains **)."""
         return '**' in path and path.startswith('http')
 
+    def is_single_url(self, path: str) -> bool:
+        """Check if path is a single URL (http/https without **)."""
+        return (path.startswith('http://') or path.startswith('https://')) and '**' not in path
+
     def load(self, path: str) -> str:
         """
         Load document content from path.
@@ -80,6 +94,10 @@ class DocumentLoader:
             if docs:
                 return docs[0].content
             return ""
+
+        # Check for single URL (fetch and process based on content-type)
+        if self.is_single_url(path):
+            return self._load_url(path)
 
         # Check for protocol-based path
         if self.is_protocol_path(path):
@@ -121,19 +139,74 @@ class DocumentLoader:
         if self.is_recursive_url(path):
             return self._crawl_recursive_url(path)
 
+        # Check for protocol-based path (may return multiple documents for JSON output)
+        if self.is_protocol_path(path):
+            protocol, actual_path = path.split(':', 1)
+            return self._load_via_protocol_multi(protocol, actual_path, path)
+
         # Single document load
         content = self.load(path)
         return [LoadedDocument(path=path, content=content)]
 
+    def _load_via_protocol_multi(self, protocol: str, path: str, full_path: str) -> List[LoadedDocument]:
+        """
+        Load documents via protocol, supporting JSON array output for multiple documents.
+
+        Like aichat, if loader outputs JSON array of {path, contents}, creates a separate
+        LoadedDocument for each item. Otherwise returns single document.
+
+        The git loader uses jq to transform yek's {filename, content} format to
+        aichat's {path, contents} format, so we only need to handle one format.
+        """
+        import json
+
+        raw_output = self._load_via_protocol_raw(protocol, path)
+
+        # Try to parse as JSON array of documents (aichat format: {path, contents})
+        try:
+            data = json.loads(raw_output)
+            if isinstance(data, list) and len(data) > 0:
+                documents = []
+                for item in data:
+                    if isinstance(item, dict):
+                        # Primary: aichat format {path, contents} (jq transforms yek to this)
+                        doc_path = item.get('path')
+                        doc_content = item.get('contents')
+                        if doc_path and doc_content:
+                            # Prefix path with protocol if not already prefixed
+                            if not doc_path.startswith(full_path):
+                                doc_path = f"{full_path}/{doc_path}"
+                            documents.append(LoadedDocument(path=doc_path, content=doc_content))
+                if documents:
+                    return documents
+        except (json.JSONDecodeError, TypeError):
+            pass  # Not JSON, treat as plain text
+
+        # Fallback: single document with raw output
+        return [LoadedDocument(path=full_path, content=raw_output)]
+
     def _load_via_protocol(self, protocol: str, path: str) -> str:
-        """Load document using protocol-specific loader command."""
+        """Load via protocol, returning concatenated content (for load() method)."""
+        docs = self._load_via_protocol_multi(protocol, path, f"{protocol}:{path}")
+        if len(docs) == 1:
+            return docs[0].content
+        # Multiple documents: concatenate with file headers
+        parts = []
+        for doc in docs:
+            parts.append(f"=== {doc.path} ===\n{doc.content}")
+        return "\n\n".join(parts)
+
+    def _load_via_protocol_raw(self, protocol: str, path: str) -> str:
+        """Run loader command and return raw output."""
+        import tempfile
+
         if protocol not in self.loaders:
             raise ValueError(f"No loader configured for protocol: {protocol}")
 
         # Get command template and build safe argument list
         cmd_template = self.loaders[protocol]
 
-        # Parse template safely with shlex, then substitute $1
+        # Parse template safely with shlex, then substitute $1 and $2
         try:
             cmd_parts = shlex.split(cmd_template)
         except ValueError as e:
@@ -152,8 +225,25 @@ class DocumentLoader:
             # For relative paths, prefix with ./ to prevent flag injection
             sanitized_path = './' + path
 
-        # Replace $1 placeholder with sanitized path
-        cmd_parts = [sanitized_path if part == '$1' else part for part in cmd_parts]
+        # Check if $2 (output file) is used - some loaders can't write to stdout
+        use_stdout = True
+        output_file = None
+        if any('$2' in part for part in cmd_parts):
+            use_stdout = False
+            # Create temp file for output
+            fd, output_file = tempfile.mkstemp(prefix='rag-loader-', suffix='.txt')
+            os.close(fd)
+
+        # Replace $1 and $2 placeholders
+        def replace_placeholders(part: str) -> str:
+            result = part
+            if '$1' in result:
+                result = result.replace('$1', sanitized_path)
+            if '$2' in result and output_file:
+                result = result.replace('$2', output_file)
+            return result
+
+        cmd_parts = [replace_placeholders(part) for part in cmd_parts]
 
         # Check if command is available
         cmd_binary = cmd_parts[0]
@@ -164,15 +254,33 @@ class DocumentLoader:
             )
 
         try:
-            result = subprocess.run(
-                cmd_parts,  # Use list, not string - prevents shell injection
-                shell=False,  # SAFE: no shell interpretation
-                capture_output=True,
-                text=True,
-                check=True,
-                timeout=300  # 5 minute timeout
-            )
-            return result.stdout
+            if use_stdout:
+                result = subprocess.run(
+                    cmd_parts,  # Use list, not string - prevents shell injection
+                    shell=False,  # SAFE: no shell interpretation
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                    timeout=300  # 5 minute timeout
+                )
+                return result.stdout
+            else:
+                # Output goes to file, not stdout
+                result = subprocess.run(
+                    cmd_parts,
+                    shell=False,
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                    timeout=300
+                )
+                # Read output from file
+                try:
+                    with open(output_file, 'r', encoding='utf-8') as f:
+                        return f.read()
+                except UnicodeDecodeError:
+                    with open(output_file, 'r', encoding='latin-1') as f:
+                        return f.read()
         except subprocess.TimeoutExpired:
             raise ValueError(f"Loader command timed out after 5 minutes: {' '.join(cmd_parts)}")
         except subprocess.CalledProcessError as e:
@@ -180,6 +288,13 @@ class DocumentLoader:
                 f"Loader command failed (exit code {e.returncode}): {' '.join(cmd_parts)}\n"
                 f"stderr: {e.stderr}"
             )
+        finally:
+            # Clean up temp file
+            if output_file and os.path.exists(output_file):
+                try:
+                    os.unlink(output_file)
+                except OSError:
+                    pass
 
     def _load_text(self, file_path: Path) -> str:
         """Load plain text file."""
@@ -205,6 +320,84 @@ class DocumentLoader:
                 return file_path.read_text(encoding='latin-1')
             except Exception as e:
                 raise ValueError(f"Failed to read file as text: {file_path}") from e
+
+    def _load_url(self, url: str) -> str:
+        """
+        Load document from URL, detecting content-type and using appropriate loader.
+
+        Similar to aichat's fetch_with_loaders - handles PDF, DOCX, HTML, etc.
+        """
+        import tempfile
+        import requests
+        from bs4 import BeautifulSoup
+
+        # Content-type to extension mapping (matches aichat)
+        CONTENT_TYPE_MAP = {
+            'application/pdf': 'pdf',
+            'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'xlsx',
+            'application/vnd.openxmlformats-officedocument.presentationml.presentation': 'pptx',
+            'application/vnd.oasis.opendocument.text': 'odt',
+            'application/vnd.oasis.opendocument.spreadsheet': 'ods',
+            'application/vnd.oasis.opendocument.presentation': 'odp',
+            'application/rtf': 'rtf',
+            'application/epub+zip': 'epub',
+        }
+
+        try:
+            response = requests.get(url, timeout=30, headers={'User-Agent': DEFAULT_USER_AGENT})
+            response.raise_for_status()
+        except Exception as e:
+            raise ValueError(f"Failed to fetch URL: {url}: {e}")
+
+        # Parse content-type (strip charset and parameters)
+        content_type = response.headers.get('Content-Type', '')
+        if ';' in content_type:
+            content_type = content_type.split(';')[0].strip()
+
+        # HTML: extract text directly
+        if 'text/html' in content_type:
+            soup = BeautifulSoup(response.text, 'html.parser')
+            for element in soup(["script", "style", "nav", "header", "footer", "aside"]):
+                element.decompose()
+            return soup.get_text(separator='\n', strip=True)
+
+        # Plain text: return directly
+        if content_type.startswith('text/'):
+            return response.text
+
+        # Check if we have a loader for this content-type
+        extension = CONTENT_TYPE_MAP.get(content_type)
+
+        # Fallback: try to detect from URL extension
+        if not extension:
+            parsed_url = urlparse(url)
+            url_path = parsed_url.path
+            if '.' in url_path:
+                extension = url_path.rsplit('.', 1)[-1].lower()
+
+        # If we have a loader for this extension, download and process
+        if extension and extension in self.loaders:
+            fd, temp_path = tempfile.mkstemp(prefix='rag-download-', suffix=f'.{extension}')
+            try:
+                os.write(fd, response.content)
+                os.close(fd)
+                return self._load_via_protocol(extension, temp_path)
+            finally:
+                if os.path.exists(temp_path):
+                    try:
+                        os.unlink(temp_path)
+                    except OSError:
+                        pass
+
+        # Unknown content type - try to decode as text
+        try:
+            return response.text
+        except Exception:
+            raise ValueError(
+                f"Cannot process URL with content-type '{content_type}': {url}. "
+                f"No loader configured for this type."
+            )
 
     def add_loader(self, protocol: str, command: str):
         """
@@ -246,9 +439,22 @@ class DocumentLoader:
         from bs4 import BeautifulSoup
 
         # Extract base URL (remove ** pattern)
-        base_url = url_pattern.replace('/**', '').replace('**', '')
+        base_url = url_pattern.replace('/**', '/').replace('**', '')
+
+        # Normalize start URL (similar to aichat's normalize_start_url)
         parsed_base = urlparse(base_url)
-        base_domain = f"{parsed_base.scheme}://{parsed_base.netloc}"
+        # Strip query string and fragment
+        normalized_path = parsed_base.path
+        # Ensure path ends at directory (at last /)
+        if '/' in normalized_path:
+            last_slash = normalized_path.rfind('/')
+            normalized_path = normalized_path[:last_slash + 1]
+        if not normalized_path.endswith('/'):
+            normalized_path += '/'
+
+        base_url = f"{parsed_base.scheme}://{parsed_base.netloc}{normalized_path}"
+        # Store base path prefix for restricting crawl scope
+        base_path_prefix = normalized_path
 
         visited = set()
         to_visit = [(base_url, 0)]  # (url, depth)
@@ -270,20 +476,20 @@ class DocumentLoader:
                 response = requests.get(url, timeout=10, headers={'User-Agent': DEFAULT_USER_AGENT})
                 response.raise_for_status()
 
-                # Rate limiting: wait 1 second between requests
-                time.sleep(1)
-
                 # Only process HTML content
                 content_type = response.headers.get('Content-Type', '')
                 if 'text/html' not in content_type:
                     continue
 
+                # Rate limiting: wait 1 second between HTML requests (after content-type check)
+                time.sleep(1)
+
                 # Parse HTML
                 soup = BeautifulSoup(response.text, 'html.parser')
 
-                # Extract text content (remove scripts and styles)
-                for script in soup(["script", "style"]):
-                    script.decompose()
+                # Extract text content (remove scripts, styles, and navigation boilerplate)
+                for element in soup(["script", "style", "nav", "header", "footer", "aside"]):
+                    element.decompose()
                 text = soup.get_text(separator='\n', strip=True)
 
                 # Check memory limit before adding document
@@ -308,11 +514,29 @@ class DocumentLoader:
                         href = link['href']
                         # Convert relative URLs to absolute
                         absolute_url = urljoin(url, href)
+                        # Strip fragment (#section) - same page, different scroll position
+                        absolute_url, _ = urldefrag(absolute_url)
 
-                        # Only follow links on the same domain (ignore protocol differences)
+                        # Parse and normalize the URL
                         parsed_url = urlparse(absolute_url)
-                        if parsed_url.netloc == parsed_base.netloc and absolute_url not in visited:
-                            to_visit.append((absolute_url, depth + 1))
+                        # Strip query string
+                        normalized_url = f"{parsed_url.scheme}://{parsed_url.netloc}{parsed_url.path}"
+                        # Normalize index pages: /path/index.html -> /path/
+                        normalized_path = parsed_url.path
+                        for index_suffix in ['/index.html', '/index.htm']:
+                            if normalized_path.endswith(index_suffix):
+                                normalized_path = normalized_path[:-len(index_suffix) + 1]  # Keep trailing /
+                                normalized_url = f"{parsed_url.scheme}://{parsed_url.netloc}{normalized_path}"
+                                break
+
+                        # Only follow links that:
+                        # 1. Are on the same domain
+                        # 2. Start with the base path prefix (stay within crawl scope)
+                        # 3. Haven't been visited
+                        if (parsed_url.netloc == parsed_base.netloc and
+                            normalized_path.startswith(base_path_prefix) and
+                            normalized_url not in visited):
+                            to_visit.append((normalized_url, depth + 1))
 
             except ValueError:
                 # Re-raise memory limit errors
@@ -332,15 +556,22 @@ def check_loader_dependencies() -> Dict[str, bool]:
     Returns:
         Dictionary mapping loader name to availability status
     """
+    # Map: command binary -> list of formats it enables
     commands = {
-        "yek": "git",
-        "pdftotext": "pdf",
-        "pandoc": "docx",
+        "pdftotext": ["pdf"],
+        "pandoc": ["docx", "odt", "rtf", "epub", "rst", "org"],
     }
 
     status = {}
-    for cmd, loader_type in commands.items():
-        status[loader_type] = shutil.which(cmd) is not None
+    for cmd, loader_types in commands.items():
+        available = shutil.which(cmd) is not None
+        for loader_type in loader_types:
+            status[loader_type] = available
+
+    # git loader requires both yek AND jq (piped together)
+    yek_available = shutil.which("yek") is not None
+    jq_available = shutil.which("jq") is not None
+    status["git"] = yek_available and jq_available
 
     return status
 
@@ -352,17 +583,33 @@ def get_missing_dependencies() -> Dict[str, str]:
     Returns:
         Dictionary mapping loader type to installation command
     """
+    missing = {}
+
+    # Check git loader (requires both yek and jq)
+    yek_available = shutil.which("yek") is not None
+    jq_available = shutil.which("jq") is not None
+    if not yek_available or not jq_available:
+        parts = []
+        if not yek_available:
+            parts.append("yek (install via cargo: cargo install yek)")
+        if not jq_available:
+            parts.append("jq (install via: sudo apt-get install jq)")
+        missing["git"] = f"Missing: {', '.join(parts)}"
+
+    # Check other loaders
     install_commands = {
-        "git": "yek is already installed via install-llm-tools.sh",
         "pdf": "sudo apt-get install poppler-utils",
         "docx": "sudo apt-get install pandoc",
+        "odt": "sudo apt-get install pandoc",
+        "rtf": "sudo apt-get install pandoc",
+        "epub": "sudo apt-get install pandoc",
+        "rst": "sudo apt-get install pandoc",
+        "org": "sudo apt-get install pandoc",
     }
 
     status = check_loader_dependencies()
-    missing = {}
-
     for loader_type, available in status.items():
-        if not available:
+        if not available and loader_type in install_commands and loader_type not in missing:
             missing[loader_type] = install_commands[loader_type]
 
     return missing
