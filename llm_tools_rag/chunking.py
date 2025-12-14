@@ -101,8 +101,8 @@ class RecursiveCharacterTextSplitter:
 
     def __init__(
         self,
-        chunk_size: int = 2000,
-        chunk_overlap: int = 200,
+        chunk_size: int = 1500,
+        chunk_overlap: int = 150,
         separators: Optional[List[str]] = None,
         length_function: Optional[Callable[[str], int]] = None
     ):
@@ -301,8 +301,8 @@ class RecursiveCharacterTextSplitter:
 
 def create_splitter_for_file(
     file_path: str,
-    chunk_size: int = 2000,
-    chunk_overlap: int = 200
+    chunk_size: int = 1500,
+    chunk_overlap: int = 150
 ) -> RecursiveCharacterTextSplitter:
     """Create a text splitter with appropriate separators for the file type."""
     separators = get_separators_for_file(file_path)

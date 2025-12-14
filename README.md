@@ -75,8 +75,8 @@ Per-collection config stored in `~/.config/io.datasette.llm/rag/<collection>/con
 
 ```yaml
 embedding_model: "azure/text-embedding-3-small"
-chunk_size: 1000
-chunk_overlap: 200
+chunk_size: 1500
+chunk_overlap: 150
 top_k: 5
 search_mode: "hybrid"  # vector | keyword | hybrid
 rrf_k: 60

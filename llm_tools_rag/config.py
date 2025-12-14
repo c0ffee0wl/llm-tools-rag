@@ -39,8 +39,8 @@ def deep_merge(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]
 # Default configuration matching aichat's structure
 DEFAULT_CONFIG = {
     "embedding_model": None,  # Will use llm's default embedding model
-    "chunk_size": 2000,
-    "chunk_overlap": 200,
+    "chunk_size": 1500,
+    "chunk_overlap": 150,
     "top_k": 5,
     "search_mode": "hybrid",  # vector | keyword | hybrid
     "rrf_k": 60,
@@ -110,8 +110,8 @@ class RAGConfig:
     def _validate_config(self):
         """Validate configuration values for consistency."""
         # Validate chunk_size and chunk_overlap
-        chunk_size = self._config.get("chunk_size", 1000)
-        chunk_overlap = self._config.get("chunk_overlap", 200)
+        chunk_size = self._config.get("chunk_size", 1500)
+        chunk_overlap = self._config.get("chunk_overlap", 150)
 
         if not isinstance(chunk_size, int) or chunk_size <= 0:
             raise ValueError(f"chunk_size must be a positive integer, got: {chunk_size}")
@@ -175,11 +175,11 @@ class RAGConfig:
 
     def get_chunk_size(self) -> int:
         """Get chunk size for text splitting."""
-        return self._config.get("chunk_size", 1000)
+        return self._config.get("chunk_size", 1500)
 
     def get_chunk_overlap(self) -> int:
         """Get chunk overlap for text splitting."""
-        return self._config.get("chunk_overlap", 200)
+        return self._config.get("chunk_overlap", 150)
 
     def get_top_k(self) -> int:
         """Get number of results to return from search."""
