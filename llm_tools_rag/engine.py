@@ -149,10 +149,16 @@ class RAGEngine:
         self._load_existing_hashes()
 
         # Try to load BM25 index from cache, rebuild if cache is stale or missing
-        if not self._load_bm25_cache():
-            self._rebuild_bm25_from_chromadb()
-            # Save the freshly rebuilt cache
-            self._save_bm25_cache()
+        # Use lock to prevent concurrent rebuilds from corrupting cache
+        if not self._acquire_lock(timeout=30.0):
+            raise RuntimeError(f"Failed to acquire lock for collection '{collection_name}' during initialization")
+        try:
+            if not self._load_bm25_cache():
+                self._rebuild_bm25_from_chromadb()
+                # Save the freshly rebuilt cache
+                self._save_bm25_cache()
+        finally:
+            self._release_lock()
 
     def _load_existing_hashes(self):
         """Load existing document hashes from ChromaDB metadata."""
@@ -1104,6 +1110,12 @@ class RAGEngine:
                 if time.time() - start_time > timeout:
                     return False
                 time.sleep(0.1)
+            except Exception:
+                # Clean up fd on any unexpected exception and re-raise
+                if self._lock_fd:
+                    self._lock_fd.close()
+                    self._lock_fd = None
+                raise
 
     def _release_lock(self):
         """Release collection lock."""
