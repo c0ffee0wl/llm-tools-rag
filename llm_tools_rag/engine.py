@@ -179,7 +179,6 @@ class RAGEngine:
             result = self.chroma_collection.get(include=["documents", "metadatas"])
 
             if not result or not result.get("ids") or not result.get("documents"):
-                print(f"Info: Collection '{self.collection_name}' is empty, skipping BM25 rebuild")
                 return  # Empty collection - mappings already cleared above
 
             chroma_ids = result["ids"]
@@ -398,8 +397,7 @@ class RAGEngine:
             current_state = self._get_collection_state_hash()
 
             if cached_state != current_state:
-                print(f"Info: BM25 cache is stale, rebuilding...")
-                return False
+                return False  # Cache stale, needs rebuild
 
             # Load cached data
             self.hybrid_search = cache_data["hybrid_search"]
@@ -410,8 +408,6 @@ class RAGEngine:
 
             # Mark BM25 as available after successful cache load
             self.bm25_available = True
-
-            print(f"Info: Loaded BM25 cache from disk")
             return True
         except Exception as e:
             print(f"Warning: Failed to load BM25 cache: {e}")
