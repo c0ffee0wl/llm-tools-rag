@@ -177,14 +177,23 @@ def register_commands(cli):
 
 
 class RAGTool(llm.Toolbox):
-    """Search indexed document collections using hybrid semantic+keyword search."""
+    """
+    Search indexed document collections using hybrid semantic+keyword search.
+
+    RAG (Retrieval-Augmented Generation) toolbox for searching pre-indexed documents.
+    Collections are created and populated using 'llm rag add'. Supports multiple search
+    modes: hybrid (default), vector-only, or keyword-only.
+    """
 
     name = "rag"
 
     def __init__(self, collection: str, top_k: int = 5, mode: str = "hybrid"):
         """
+        Initialize RAG search for a specific collection.
+
         Args:
-            collection: Name of the RAG collection to search (REQUIRED)
+            collection: Name of the RAG collection to search (REQUIRED).
+                        Use 'llm rag list' to see available collections.
             top_k: Number of results to return (default: 5)
             mode: Search mode - "hybrid" (default), "vector", or "keyword"
         """
@@ -194,24 +203,20 @@ class RAGTool(llm.Toolbox):
 
     def search(self, query: str) -> str:
         """
-        Search indexed documents. Use when user asks to search their docs/codebase.
+        Search indexed documents using hybrid semantic and keyword matching.
 
-        IMPORTANT: Do NOT use this tool unless the user explicitly asks to:
-        - "search my docs for...", "what do my notes say about..."
-        - "find in my codebase...", "where is X defined?"
-        - "look up in [collection name]..."
-
-        Do NOT use for:
-        - General knowledge questions you can answer from training data
-        - Web searches (use search_google instead)
-        - Real-time/current information not in indexed documents
+        Searches the configured RAG collection and returns relevant document excerpts
+        with source attribution. Results are ranked by a combination of vector similarity
+        and BM25 keyword matching for comprehensive retrieval.
 
         Args:
             query: Search query - be specific for better results.
-                   Examples: "authentication flow", "def search_", "RAGEngine"
+                   Examples: "authentication flow", "def search_", "RAGEngine",
+                   "how does X work", "error handling in module Y"
 
         Returns:
-            Numbered document excerpts with source paths, or "No relevant documents found."
+            Numbered document excerpts with source file paths, formatted for context.
+            Returns "No relevant documents found." if no matches.
         """
         try:
             engine = get_or_create_engine(self.collection)
