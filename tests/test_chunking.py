@@ -75,14 +75,14 @@ def function():
 
 def test_empty_text():
     """Test handling of empty text."""
-    splitter = RecursiveCharacterTextSplitter()
+    splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
     output = splitter.split_text("")
     assert output == []
 
 
 def test_text_smaller_than_chunk():
     """Test text that's smaller than chunk size."""
-    splitter = RecursiveCharacterTextSplitter(chunk_size=1000)
+    splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
     output = splitter.split_text("Small text")
     assert output == ["Small text"]
 

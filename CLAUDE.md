@@ -79,8 +79,8 @@ Query → engine.py (embed) → ChromaDB search + BM25 search → search.py (RRF
 
 ```yaml
 embedding_model: null          # Uses llm default if not set
-chunk_size: 1500               # Characters, not tokens
-chunk_overlap: 150
+chunk_size: 1000               # Characters, not tokens
+chunk_overlap: 100
 top_k: 5
 search_mode: "hybrid"          # vector | keyword | hybrid
 vector_weight: 0.7

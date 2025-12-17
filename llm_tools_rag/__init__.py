@@ -7,7 +7,7 @@ from typing import Optional, List, Dict, Any
 import click
 
 from .engine import RAGEngine, get_or_create_engine
-from .config import list_collections, get_rag_config_dir
+from .config import list_collections, get_rag_config_dir, DEFAULT_CONFIG
 from .loaders import check_loader_dependencies, get_missing_dependencies
 from .repl import start_repl
 
@@ -187,15 +187,20 @@ class RAGTool(llm.Toolbox):
 
     name = "rag"
 
-    def __init__(self, collection: str, top_k: int = 5, mode: str = "hybrid"):
+    def __init__(
+        self,
+        collection: str,
+        top_k: int = DEFAULT_CONFIG["top_k"],
+        mode: str = DEFAULT_CONFIG["search_mode"]
+    ):
         """
         Initialize RAG search for a specific collection.
 
         Args:
             collection: Name of the RAG collection to search (REQUIRED).
                         Use 'llm rag list' to see available collections.
-            top_k: Number of results to return (default: 5)
-            mode: Search mode - "hybrid" (default), "vector", or "keyword"
+            top_k: Number of results to return
+            mode: Search mode - "hybrid", "vector", or "keyword"
         """
         self.collection = collection
         self.top_k = top_k
@@ -267,8 +272,8 @@ __all__ = [
 def search_collection(
     collection: str,
     query: str,
-    top_k: int = 5,
-    mode: str = "hybrid"
+    top_k: int = DEFAULT_CONFIG["top_k"],
+    mode: str = DEFAULT_CONFIG["search_mode"]
 ) -> List[Dict[str, Any]]:
     """
     Search a RAG collection. Returns list of results.
@@ -276,8 +281,8 @@ def search_collection(
     Args:
         collection: Name of the collection to search
         query: Search query string
-        top_k: Number of results to return (default: 5)
-        mode: Search mode - "hybrid" (default), "vector", or "keyword"
+        top_k: Number of results to return
+        mode: Search mode - "hybrid", "vector", or "keyword"
 
     Returns:
         List of result dicts with: id, content, metadata (source, chunk_index, etc.)

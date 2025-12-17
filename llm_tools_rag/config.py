@@ -39,8 +39,8 @@ def deep_merge(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]
 # Default configuration matching aichat's structure
 DEFAULT_CONFIG = {
     "embedding_model": None,  # Will use llm's default embedding model
-    "chunk_size": 1500,
-    "chunk_overlap": 150,
+    "chunk_size": 1000,
+    "chunk_overlap": 100,
     "top_k": 5,
     "search_mode": "hybrid",  # vector | keyword | hybrid
     "rrf_k": 60,
@@ -110,8 +110,8 @@ class RAGConfig:
     def _validate_config(self):
         """Validate configuration values for consistency."""
         # Validate chunk_size and chunk_overlap
-        chunk_size = self._config.get("chunk_size", 1500)
-        chunk_overlap = self._config.get("chunk_overlap", 150)
+        chunk_size = self._config.get("chunk_size", DEFAULT_CONFIG["chunk_size"])
+        chunk_overlap = self._config.get("chunk_overlap", DEFAULT_CONFIG["chunk_overlap"])
 
         if not isinstance(chunk_size, int) or chunk_size <= 0:
             raise ValueError(f"chunk_size must be a positive integer, got: {chunk_size}")
@@ -126,18 +126,18 @@ class RAGConfig:
             )
 
         # Validate top_k
-        top_k = self._config.get("top_k", 5)
+        top_k = self._config.get("top_k", DEFAULT_CONFIG["top_k"])
         if not isinstance(top_k, int) or top_k <= 0:
             raise ValueError(f"top_k must be a positive integer, got: {top_k}")
 
         # Validate search_mode
-        search_mode = self._config.get("search_mode", "hybrid")
+        search_mode = self._config.get("search_mode", DEFAULT_CONFIG["search_mode"])
         valid_modes = ["vector", "keyword", "hybrid"]
         if search_mode not in valid_modes:
             raise ValueError(f"search_mode must be one of {valid_modes}, got: {search_mode}")
 
         # Validate rrf_k (RRF constant) - reasonable bounds to prevent numerical precision issues
-        rrf_k = self._config.get("rrf_k", 60)
+        rrf_k = self._config.get("rrf_k", DEFAULT_CONFIG["rrf_k"])
         if not isinstance(rrf_k, int) or not (1 <= rrf_k <= 100):
             raise ValueError(
                 f"rrf_k must be an integer between 1 and 100, got: {rrf_k}. "
@@ -145,8 +145,8 @@ class RAGConfig:
             )
 
         # Validate vector_weight and keyword_weight are non-negative
-        vector_weight = self._config.get("vector_weight", 0.7)
-        keyword_weight = self._config.get("keyword_weight", 0.3)
+        vector_weight = self._config.get("vector_weight", DEFAULT_CONFIG["vector_weight"])
+        keyword_weight = self._config.get("keyword_weight", DEFAULT_CONFIG["keyword_weight"])
         if not isinstance(vector_weight, (int, float)) or vector_weight < 0:
             raise ValueError(f"vector_weight must be a non-negative number, got: {vector_weight}")
         if not isinstance(keyword_weight, (int, float)) or keyword_weight < 0:
@@ -175,19 +175,19 @@ class RAGConfig:
 
     def get_chunk_size(self) -> int:
         """Get chunk size for text splitting."""
-        return self._config.get("chunk_size", 1500)
+        return self._config.get("chunk_size", DEFAULT_CONFIG["chunk_size"])
 
     def get_chunk_overlap(self) -> int:
         """Get chunk overlap for text splitting."""
-        return self._config.get("chunk_overlap", 150)
+        return self._config.get("chunk_overlap", DEFAULT_CONFIG["chunk_overlap"])
 
     def get_top_k(self) -> int:
         """Get number of results to return from search."""
-        return self._config.get("top_k", 5)
+        return self._config.get("top_k", DEFAULT_CONFIG["top_k"])
 
     def get_search_mode(self) -> str:
         """Get search mode: vector, keyword, or hybrid."""
-        return self._config.get("search_mode", "hybrid")
+        return self._config.get("search_mode", DEFAULT_CONFIG["search_mode"])
 
     def get_embedding_model(self) -> Optional[str]:
         """Get embedding model identifier."""

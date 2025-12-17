@@ -8,6 +8,8 @@ from typing import List, Dict, Tuple, Any, Optional
 from rank_bm25 import BM25Okapi
 import re
 
+from llm_tools_rag.config import DEFAULT_CONFIG
+
 
 def tokenize(text: str) -> List[str]:
     """
@@ -23,8 +25,8 @@ def tokenize(text: str) -> List[str]:
 def reciprocal_rank_fusion(
     ranked_lists: List[List[int]],
     weights: List[float],
-    rrf_k: int = 60,
-    top_k: int = 5
+    rrf_k: int,
+    top_k: int
 ) -> List[int]:
     """
     Combine multiple ranked lists using Reciprocal Rank Fusion.
@@ -35,7 +37,7 @@ def reciprocal_rank_fusion(
     Args:
         ranked_lists: List of ranked document ID lists
         weights: Weight for each ranked list
-        rrf_k: RRF constant (default: 60, should be constant for consistent scoring)
+        rrf_k: RRF constant (should be constant for consistent scoring)
         top_k: Number of results to return
 
     Returns:
@@ -174,9 +176,9 @@ class HybridSearch:
 
     def __init__(
         self,
-        vector_weight: float = 0.7,
-        keyword_weight: float = 0.3,
-        rrf_k: int = 60
+        vector_weight: float,
+        keyword_weight: float,
+        rrf_k: int
     ):
         """
         Initialize hybrid search.
@@ -195,7 +197,7 @@ class HybridSearch:
         self,
         query: str,
         vector_results: List[int],
-        top_k: int = 5
+        top_k: int
     ) -> List[int]:
         """
         Perform hybrid search combining vector and keyword results.
@@ -244,15 +246,15 @@ def create_hybrid_searcher(config: Dict[str, Any]) -> HybridSearch:
 
     Args:
         config: Configuration dictionary with optional keys:
-            - vector_weight: Weight for vector search (default: 0.7)
-            - keyword_weight: Weight for keyword search (default: 0.3)
-            - rrf_k: RRF constant (default: 60)
+            - vector_weight: Weight for vector search
+            - keyword_weight: Weight for keyword search
+            - rrf_k: RRF constant
 
     Returns:
         Configured HybridSearch instance
     """
     return HybridSearch(
-        vector_weight=config.get('vector_weight', 0.7),
-        keyword_weight=config.get('keyword_weight', 0.3),
-        rrf_k=config.get('rrf_k', 60)
+        vector_weight=config.get('vector_weight', DEFAULT_CONFIG['vector_weight']),
+        keyword_weight=config.get('keyword_weight', DEFAULT_CONFIG['keyword_weight']),
+        rrf_k=config.get('rrf_k', DEFAULT_CONFIG['rrf_k'])
     )
