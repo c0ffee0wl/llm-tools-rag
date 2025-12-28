@@ -47,6 +47,10 @@ DEFAULT_CONFIG = {
     "vector_weight": 0.7,
     "keyword_weight": 0.3,
     "diversity_lambda": 1.0,  # MMR: 1.0=relevance-only (disabled), 0.5=balanced, 0.0=diversity-only
+    "reranker_model": "BAAI/bge-reranker-v2-m3",  # Cross-encoder reranker (None to disable)
+    "reranker_top_k": None,  # None=use top_k, int=separate limit for reranker output
+    "query_aware_weights": True,  # Enable dynamic weight adjustment based on query type
+    "contextual_headers": True,  # Prepend source context to chunks before embedding
     "document_loaders": {
         # Git loader: yek with jq transform to aichat format (matches aichat exactly)
         "git": """sh -c "yek $1 --json | jq '[.[] | { path: .filename, contents: .content }]'" """,
@@ -167,6 +171,27 @@ class RAGConfig:
                 f"Use 1.0 to disable diversity (relevance-only), 0.5 for balanced, 0.0 for max diversity."
             )
 
+        # Validate reranker_model (string or None)
+        reranker_model = self._config.get("reranker_model")
+        if reranker_model is not None and not isinstance(reranker_model, str):
+            raise ValueError(f"reranker_model must be a string or None, got: {type(reranker_model).__name__}")
+
+        # Validate reranker_top_k (positive int or None)
+        reranker_top_k = self._config.get("reranker_top_k")
+        if reranker_top_k is not None:
+            if not isinstance(reranker_top_k, int) or reranker_top_k <= 0:
+                raise ValueError(f"reranker_top_k must be a positive integer or None, got: {reranker_top_k}")
+
+        # Validate query_aware_weights (boolean)
+        query_aware_weights = self._config.get("query_aware_weights", True)
+        if not isinstance(query_aware_weights, bool):
+            raise ValueError(f"query_aware_weights must be a boolean, got: {type(query_aware_weights).__name__}")
+
+        # Validate contextual_headers (boolean)
+        contextual_headers = self._config.get("contextual_headers", True)
+        if not isinstance(contextual_headers, bool):
+            raise ValueError(f"contextual_headers must be a boolean, got: {type(contextual_headers).__name__}")
+
     def save(self):
         """Save global configuration to file."""
         # Create directory if it doesn't exist
@@ -211,6 +236,22 @@ class RAGConfig:
     def get_loaders(self) -> Dict[str, str]:
         """Get document loaders configuration."""
         return self._config.get("document_loaders", DEFAULT_CONFIG["document_loaders"].copy())
+
+    def get_reranker_model(self) -> Optional[str]:
+        """Get cross-encoder reranker model name, or None if disabled."""
+        return self._config.get("reranker_model", DEFAULT_CONFIG["reranker_model"])
+
+    def get_reranker_top_k(self) -> Optional[int]:
+        """Get reranker output limit, or None to use top_k."""
+        return self._config.get("reranker_top_k", DEFAULT_CONFIG["reranker_top_k"])
+
+    def get_query_aware_weights(self) -> bool:
+        """Get whether query-aware weight adjustment is enabled."""
+        return self._config.get("query_aware_weights", DEFAULT_CONFIG["query_aware_weights"])
+
+    def get_contextual_headers(self) -> bool:
+        """Get whether contextual headers are prepended to chunks before embedding."""
+        return self._config.get("contextual_headers", DEFAULT_CONFIG["contextual_headers"])
 
     def to_dict(self) -> Dict[str, Any]:
         """Get configuration as dictionary."""

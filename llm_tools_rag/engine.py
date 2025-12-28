@@ -724,8 +724,21 @@ class RAGEngine:
             if not unique_chunks:
                 return {"status": "skipped", "reason": "all chunks duplicate", "path": path}
 
+            # Apply contextual headers if enabled (improves embedding quality)
+            # We embed with headers for context, but store original chunks for clean display
+            if self.config.get_contextual_headers():
+                # Get source name for header
+                source_name = Path(path).name if not self.loader.is_protocol_path(path) else path
+                chunks_for_embedding = [
+                    f"Source: {source_name}\n\n{chunk}"
+                    for chunk in unique_chunks
+                ]
+            else:
+                chunks_for_embedding = unique_chunks
+
             # Generate embeddings with batching support
-            embeddings = self._embed_chunks(unique_chunks)
+            # Uses header-prefixed chunks if contextual_headers enabled
+            embeddings = self._embed_chunks(chunks_for_embedding)
 
             # Get next available BM25 ID (max + 1) to assign new sequential IDs
             # This prevents collisions after deletions
@@ -960,32 +973,50 @@ class RAGEngine:
                 if bm25_id in self.bm25_to_chroma:
                     final_ids.append(self.bm25_to_chroma[bm25_id])
         else:  # hybrid
+            # Apply query-aware weight adjustment if enabled
+            if self.config.get_query_aware_weights():
+                from llm_tools_rag.query_analyzer import analyze_query
+                vector_weight, keyword_weight = analyze_query(query)
+                # Temporarily override weights for this search
+                saved_vector_weight = self.hybrid_search.vector_weight
+                saved_keyword_weight = self.hybrid_search.keyword_weight
+                self.hybrid_search.vector_weight = vector_weight
+                self.hybrid_search.keyword_weight = keyword_weight
+            else:
+                saved_vector_weight = None  # Flag to skip restoration
+
             # Convert ChromaDB string IDs to BM25 integer IDs for hybrid search
             vector_bm25_ids = []
             for chroma_id in vector_doc_ids:
                 if chroma_id in self.chroma_to_bm25:
                     vector_bm25_ids.append(self.chroma_to_bm25[chroma_id])
 
-            if not vector_bm25_ids:
-                # Fallback to vector-only if no BM25 mappings exist
-                final_ids = vector_doc_ids[:top_k]
-            else:
-                # Perform hybrid search with BM25 IDs
-                fused_bm25_ids = self.hybrid_search.search(
-                    query=query,
-                    vector_results=vector_bm25_ids,
-                    top_k=top_k
-                )
+            try:
+                if not vector_bm25_ids:
+                    # Fallback to vector-only if no BM25 mappings exist
+                    final_ids = vector_doc_ids[:top_k]
+                else:
+                    # Perform hybrid search with BM25 IDs
+                    fused_bm25_ids = self.hybrid_search.search(
+                        query=query,
+                        vector_results=vector_bm25_ids,
+                        top_k=top_k
+                    )
 
-                # Map BM25 IDs back to ChromaDB IDs
-                final_ids = []
-                for bm25_id in fused_bm25_ids:
-                    if bm25_id in self.bm25_to_chroma:
-                        final_ids.append(self.bm25_to_chroma[bm25_id])
+                    # Map BM25 IDs back to ChromaDB IDs
+                    final_ids = []
+                    for bm25_id in fused_bm25_ids:
+                        if bm25_id in self.bm25_to_chroma:
+                            final_ids.append(self.bm25_to_chroma[bm25_id])
 
-                # Filter hybrid results by metadata (BM25 component wasn't filtered)
-                if filters:
-                    final_ids = self._filter_chroma_ids(final_ids, filters)
+                    # Filter hybrid results by metadata (BM25 component wasn't filtered)
+                    if filters:
+                        final_ids = self._filter_chroma_ids(final_ids, filters)
+            finally:
+                # Restore original weights if they were modified (always, even on exception)
+                if saved_vector_weight is not None:
+                    self.hybrid_search.vector_weight = saved_vector_weight
+                    self.hybrid_search.keyword_weight = saved_keyword_weight
 
         # Retrieve full documents
         if not final_ids:
@@ -1044,7 +1075,38 @@ class RAGEngine:
                     k=top_k
                 )
 
-        # Re-order results according to final_ids (preserves RRF/MMR ranking)
+        # Apply cross-encoder reranker if enabled
+        reranker_model = self.config.get_reranker_model()
+        if reranker_model and len(final_ids) > 1:
+            try:
+                from llm_tools_rag.reranker import rerank
+
+                # Collect documents to rerank
+                docs_to_rerank = []
+                valid_ids_for_rerank = []
+                for doc_id in final_ids:
+                    if doc_id in id_to_data:
+                        content, _ = id_to_data[doc_id]
+                        docs_to_rerank.append(content)
+                        valid_ids_for_rerank.append(doc_id)
+
+                if docs_to_rerank:
+                    reranker_top_k = self.config.get_reranker_top_k() or top_k
+                    final_ids = rerank(
+                        query=query,
+                        documents=docs_to_rerank,
+                        ids=valid_ids_for_rerank,
+                        model_name=reranker_model,
+                        top_k=reranker_top_k
+                    )
+            except ImportError:
+                # sentence-transformers not installed - skip reranking
+                pass
+            except Exception as e:
+                # Reranking failed - log warning and continue with original order
+                print(f"Warning: Reranking failed: {e}")
+
+        # Re-order results according to final_ids (preserves RRF/MMR/reranker ranking)
         results = []
         sources_set = set()
 
