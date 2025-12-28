@@ -72,6 +72,7 @@ def register_commands(cli):
 
         except Exception as e:
             click.echo(f"Error: {e}", err=True)
+            raise SystemExit(1)
 
     @rag_group.command(name="info")
     @click.argument("collection")

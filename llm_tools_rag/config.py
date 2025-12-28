@@ -152,6 +152,12 @@ class RAGConfig:
         if not isinstance(keyword_weight, (int, float)) or keyword_weight < 0:
             raise ValueError(f"keyword_weight must be a non-negative number, got: {keyword_weight}")
 
+        # Ensure at least one search method is active
+        if vector_weight == 0 and keyword_weight == 0:
+            raise ValueError(
+                "At least one of vector_weight or keyword_weight must be greater than 0"
+            )
+
     def save(self):
         """Save global configuration to file."""
         # Create directory if it doesn't exist

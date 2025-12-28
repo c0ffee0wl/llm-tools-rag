@@ -546,6 +546,13 @@ class DocumentLoader:
                 response = requests.get(url, timeout=10, headers={'User-Agent': DEFAULT_USER_AGENT})
                 response.raise_for_status()
 
+                # Check content-length header before processing body
+                content_length = response.headers.get('Content-Length')
+                if content_length:
+                    size = int(content_length)
+                    if total_content_bytes + size > max_memory_bytes:
+                        continue  # Skip oversized pages
+
                 # Only process HTML content
                 content_type = response.headers.get('Content-Type', '')
                 if 'text/html' not in content_type:
