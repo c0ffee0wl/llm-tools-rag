@@ -10,16 +10,55 @@ import re
 
 from llm_tools_rag.config import DEFAULT_CONFIG
 
+# Lazy-loaded stemmer and stopwords (avoid import overhead until first use)
+_stemmer = None
+_stopwords = None
+
+
+def _get_stemmer():
+    """Get or create Porter stemmer instance (lazy-loaded)."""
+    global _stemmer
+    if _stemmer is None:
+        from nltk.stem import PorterStemmer
+        _stemmer = PorterStemmer()
+    return _stemmer
+
+
+def _get_stopwords():
+    """Get stopwords set (lazy-loaded with automatic download)."""
+    global _stopwords
+    if _stopwords is None:
+        try:
+            from nltk.corpus import stopwords
+            _stopwords = set(stopwords.words('english'))
+        except LookupError:
+            # Stopwords not downloaded - download quietly
+            import nltk
+            nltk.download('stopwords', quiet=True)
+            from nltk.corpus import stopwords
+            _stopwords = set(stopwords.words('english'))
+    return _stopwords
+
 
 def tokenize(text: str) -> List[str]:
     """
-    Tokenize text for BM25 with Unicode support.
+    Tokenize text for BM25 with stemming and stopword removal.
+
+    Uses Porter stemmer for morphological normalization and removes common
+    English stopwords to improve BM25 matching quality.
+
     Supports international text including Chinese, Japanese, Arabic, etc.
+    (though stemming only applies to English-like tokens).
     """
     # Lowercase and split on word characters with Unicode support
-    # re.UNICODE flag makes \w match Unicode word characters
     tokens = re.findall(r'[\w]+', text.lower(), re.UNICODE)
-    return tokens
+
+    # Apply stemming and stopword removal
+    stemmer = _get_stemmer()
+    stops = _get_stopwords()
+
+    # Filter short tokens (len > 1) and stopwords, then stem
+    return [stemmer.stem(t) for t in tokens if t not in stops and len(t) > 1]
 
 
 def reciprocal_rank_fusion(

@@ -46,6 +46,7 @@ DEFAULT_CONFIG = {
     "rrf_k": 60,
     "vector_weight": 0.7,
     "keyword_weight": 0.3,
+    "diversity_lambda": 1.0,  # MMR: 1.0=relevance-only (disabled), 0.5=balanced, 0.0=diversity-only
     "document_loaders": {
         # Git loader: yek with jq transform to aichat format (matches aichat exactly)
         "git": """sh -c "yek $1 --json | jq '[.[] | { path: .filename, contents: .content }]'" """,
@@ -156,6 +157,14 @@ class RAGConfig:
         if vector_weight == 0 and keyword_weight == 0:
             raise ValueError(
                 "At least one of vector_weight or keyword_weight must be greater than 0"
+            )
+
+        # Validate diversity_lambda (MMR parameter)
+        diversity_lambda = self._config.get("diversity_lambda", DEFAULT_CONFIG["diversity_lambda"])
+        if not isinstance(diversity_lambda, (int, float)) or not (0 <= diversity_lambda <= 1):
+            raise ValueError(
+                f"diversity_lambda must be a number between 0 and 1, got: {diversity_lambda}. "
+                f"Use 1.0 to disable diversity (relevance-only), 0.5 for balanced, 0.0 for max diversity."
             )
 
     def save(self):

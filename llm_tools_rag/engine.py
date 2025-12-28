@@ -185,7 +185,9 @@ class RAGEngine:
             result = self.chroma_collection.get(include=["documents", "metadatas"])
 
             if not result or not result.get("ids") or not result.get("documents"):
-                return  # Empty collection - mappings already cleared above
+                # Empty collection - mark BM25 as unavailable and return
+                self.bm25_available = False
+                return
 
             chroma_ids = result["ids"]
             documents = result["documents"]
@@ -207,9 +209,13 @@ class RAGEngine:
             for chroma_id, doc, metadata in zip(chroma_ids, documents, metadatas):
                 if metadata and "bm25_id" in metadata:
                     # Document already has a BM25 ID
-                    bm25_id = int(metadata["bm25_id"])
-                    used_bm25_ids.add(bm25_id)
-                    documents_with_ids.append((chroma_id, doc, metadata, bm25_id))
+                    try:
+                        bm25_id = int(metadata["bm25_id"])
+                        used_bm25_ids.add(bm25_id)
+                        documents_with_ids.append((chroma_id, doc, metadata, bm25_id))
+                    except (ValueError, TypeError):
+                        # Corrupted bm25_id metadata - treat as needing new ID
+                        documents_without_ids.append((chroma_id, doc, metadata or {}))
                 else:
                     # Document needs a BM25 ID assigned
                     documents_without_ids.append((chroma_id, doc, metadata or {}))
@@ -803,7 +809,8 @@ class RAGEngine:
         self,
         query: str,
         top_k: Optional[int] = None,
-        mode: Optional[str] = None
+        mode: Optional[str] = None,
+        filters: Optional[Dict[str, Any]] = None
     ) -> List[Dict[str, Any]]:
         """
         Search the RAG collection.
@@ -812,6 +819,7 @@ class RAGEngine:
             query: Search query
             top_k: Number of results (uses config default if not specified)
             mode: Search mode override (vector, keyword, hybrid)
+            filters: Metadata filters (e.g., {"source": "file.py"} or {"source_contains": "src/"})
 
         Returns:
             List of result dictionaries with content and metadata
@@ -862,7 +870,13 @@ class RAGEngine:
             )
 
         # Check if already nested (2D array)
-        if isinstance(query_embedding[0], (list, tuple)) or hasattr(query_embedding[0], '__iter__'):
+        # Exclude strings - they are iterable but not valid embedding containers
+        first_elem = query_embedding[0]
+        is_nested = (
+            isinstance(first_elem, (list, tuple)) or
+            (hasattr(first_elem, '__iter__') and not isinstance(first_elem, (str, bytes)))
+        )
+        if is_nested:
             # Nested structure - validate it's properly formatted
             try:
                 # Convert to list of lists and validate numbers
@@ -898,9 +912,13 @@ class RAGEngine:
                     f"for query: {query[:50]}..."
                 )
 
+        # Build where clause for filtering
+        where_clause = self._build_where_clause(filters) if filters else None
+
         vector_results = self.chroma_collection.query(
             query_embeddings=query_embeddings,
-            n_results=top_k * 2  # Get more for fusion
+            n_results=top_k * 2,  # Get more for fusion
+            where=where_clause
         )
 
         # Comprehensive ChromaDB response validation
@@ -927,12 +945,18 @@ class RAGEngine:
         # Apply search mode
         if mode == "vector":
             final_ids = vector_doc_ids[:top_k]
+            # Apply post-filtering for substring filters (ChromaDB doesn't support $contains on metadata)
+            if filters and self._has_post_filters(filters):
+                final_ids = self._filter_chroma_ids(final_ids, filters)
         elif mode == "keyword":
             # BM25 only - perform pure keyword search
-            keyword_results = self.hybrid_search.bm25_index.search(query, top_k=top_k)
+            keyword_results = self.hybrid_search.bm25_index.search(query, top_k=top_k * 2)
+            # Filter BM25 results by metadata if filters specified
+            if filters:
+                keyword_results = self._filter_bm25_results(keyword_results, filters)
             # Map BM25 IDs back to ChromaDB IDs
             final_ids = []
-            for bm25_id in keyword_results:
+            for bm25_id in keyword_results[:top_k]:
                 if bm25_id in self.bm25_to_chroma:
                     final_ids.append(self.bm25_to_chroma[bm25_id])
         else:  # hybrid
@@ -959,13 +983,26 @@ class RAGEngine:
                     if bm25_id in self.bm25_to_chroma:
                         final_ids.append(self.bm25_to_chroma[bm25_id])
 
+                # Filter hybrid results by metadata (BM25 component wasn't filtered)
+                if filters:
+                    final_ids = self._filter_chroma_ids(final_ids, filters)
+
         # Retrieve full documents
         if not final_ids:
             return []
 
+        # Check if MMR (diversity) is enabled
+        diversity_lambda = self.config.get("diversity_lambda", 1.0)
+        use_mmr = diversity_lambda < 1.0
+
+        # Fetch with embeddings if MMR is enabled
+        include_fields = ["documents", "metadatas"]
+        if use_mmr:
+            include_fields.append("embeddings")
+
         result_docs = self.chroma_collection.get(
             ids=final_ids,
-            include=["documents", "metadatas"]
+            include=include_fields
         )
 
         # ChromaDB doesn't guarantee order preservation, so we need to re-sort
@@ -973,13 +1010,41 @@ class RAGEngine:
         ids = result_docs.get("ids", [])
         documents = result_docs.get("documents", [])
         metadatas = result_docs.get("metadatas", [])
+        embeddings_list = result_docs.get("embeddings", []) if use_mmr else []
 
         # Build ID -> (document, metadata) mapping
         id_to_data = {}
-        for doc_id, content, metadata in zip(ids, documents, metadatas if metadatas else [{}] * len(ids)):
+        id_to_embedding = {}
+        for i, doc_id in enumerate(ids):
+            content = documents[i] if documents else ""
+            metadata = metadatas[i] if metadatas and i < len(metadatas) else {}
             id_to_data[doc_id] = (content, metadata if metadata else {})
+            if embeddings_list and i < len(embeddings_list):
+                id_to_embedding[doc_id] = embeddings_list[i]
 
-        # Re-order results according to final_ids (preserves RRF ranking)
+        # Apply MMR if diversity is enabled
+        if use_mmr and id_to_embedding and len(final_ids) > 1:
+            from llm_tools_rag.diversity import maximal_marginal_relevance
+
+            # Get embeddings in final_ids order (only for IDs that have embeddings)
+            ordered_embeddings = []
+            valid_ids = []
+            for doc_id in final_ids:
+                if doc_id in id_to_embedding:
+                    ordered_embeddings.append(id_to_embedding[doc_id])
+                    valid_ids.append(doc_id)
+
+            if ordered_embeddings:
+                # Reorder using MMR
+                final_ids = maximal_marginal_relevance(
+                    query_embedding=query_embeddings[0],
+                    embeddings=ordered_embeddings,
+                    ids=valid_ids,
+                    lambda_mult=diversity_lambda,
+                    k=top_k
+                )
+
+        # Re-order results according to final_ids (preserves RRF/MMR ranking)
         results = []
         sources_set = set()
 
@@ -999,6 +1064,131 @@ class RAGEngine:
         self.last_search_sources = sorted(list(sources_set))
 
         return results
+
+    def _build_where_clause(self, filters: Dict[str, Any]) -> Optional[Dict]:
+        """
+        Convert filters to ChromaDB where clause.
+
+        Note: ChromaDB only supports $contains on document content (#document),
+        not on metadata fields. Substring filters like 'source_contains' must be
+        handled via post-filtering in _filter_chroma_ids().
+
+        Args:
+            filters: Dictionary of filter conditions
+
+        Returns:
+            ChromaDB where clause dictionary or None
+        """
+        if not filters:
+            return None
+
+        clauses = []
+        for key, value in filters.items():
+            if key.endswith("_contains"):
+                # Skip substring filters - ChromaDB doesn't support $contains on metadata
+                # These are handled in post-filtering (_filter_chroma_ids, _matches_filter)
+                continue
+            else:
+                # Exact match - supported by ChromaDB
+                clauses.append({key: {"$eq": value}})
+
+        if len(clauses) > 1:
+            return {"$and": clauses}
+        elif clauses:
+            return clauses[0]
+        return None
+
+    def _has_post_filters(self, filters: Dict[str, Any]) -> bool:
+        """Check if filters contain conditions that require post-filtering."""
+        if not filters:
+            return False
+        return any(key.endswith("_contains") for key in filters.keys())
+
+    def _filter_bm25_results(self, bm25_ids: List[int], filters: Dict[str, Any]) -> List[int]:
+        """
+        Filter BM25 results by metadata (BM25 doesn't support where clauses).
+
+        Args:
+            bm25_ids: List of BM25 integer IDs
+            filters: Dictionary of filter conditions
+
+        Returns:
+            Filtered list of BM25 IDs (preserving order)
+        """
+        if not filters or not bm25_ids:
+            return bm25_ids
+
+        # Convert BM25 IDs to ChromaDB IDs
+        chroma_ids = [self.bm25_to_chroma.get(bid) for bid in bm25_ids]
+        chroma_ids = [cid for cid in chroma_ids if cid]
+
+        if not chroma_ids:
+            return []
+
+        # Batch fetch metadata for efficiency
+        result = self.chroma_collection.get(ids=chroma_ids, include=["metadatas"])
+
+        # Build set of passing ChromaDB IDs
+        passing_chroma_ids = set()
+        for cid, meta in zip(result.get("ids", []), result.get("metadatas", [])):
+            if meta and self._matches_filter(meta, filters):
+                passing_chroma_ids.add(cid)
+
+        # Return BM25 IDs that pass filter (preserving order)
+        return [bid for bid in bm25_ids
+                if self.bm25_to_chroma.get(bid) in passing_chroma_ids]
+
+    def _matches_filter(self, metadata: Dict, filters: Dict[str, Any]) -> bool:
+        """
+        Check if metadata matches all filters.
+
+        Supports:
+        - Exact match: {"field": "value"}
+        - Substring match: {"field_contains": "substring"}
+
+        Args:
+            metadata: Document metadata dictionary
+            filters: Dictionary of filter conditions
+
+        Returns:
+            True if all filters match, False otherwise
+        """
+        for key, value in filters.items():
+            if key.endswith("_contains"):
+                # Substring match: "field_contains" checks if value is in metadata["field"]
+                field_name = key[:-9]  # Remove "_contains" suffix
+                if value not in metadata.get(field_name, ""):
+                    return False
+            elif metadata.get(key) != value:
+                # Exact match
+                return False
+        return True
+
+    def _filter_chroma_ids(self, chroma_ids: List[str], filters: Dict[str, Any]) -> List[str]:
+        """
+        Filter ChromaDB IDs by metadata.
+
+        Args:
+            chroma_ids: List of ChromaDB string IDs
+            filters: Dictionary of filter conditions
+
+        Returns:
+            Filtered list of ChromaDB IDs (preserving order)
+        """
+        if not filters or not chroma_ids:
+            return chroma_ids
+
+        # Batch fetch metadata
+        result = self.chroma_collection.get(ids=chroma_ids, include=["metadatas"])
+
+        # Build set of passing IDs
+        passing_ids = set()
+        for cid, meta in zip(result.get("ids", []), result.get("metadatas", [])):
+            if meta and self._matches_filter(meta, filters):
+                passing_ids.add(cid)
+
+        # Return IDs that pass filter (preserving order)
+        return [cid for cid in chroma_ids if cid in passing_ids]
 
     def list_documents(self) -> List[str]:
         """Get list of document paths in collection from ChromaDB metadata."""

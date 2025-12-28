@@ -55,11 +55,23 @@ def register_commands(cli):
     @click.argument("query")
     @click.option("--top-k", "-k", type=int, help="Number of results")
     @click.option("--mode", type=click.Choice(["vector", "keyword", "hybrid"]), help="Search mode")
-    def search_cmd(collection: str, query: str, top_k: Optional[int], mode: Optional[str]):
+    @click.option("--filter", "-f", "filters", multiple=True,
+                  help="Filter by metadata (e.g., -f source_contains:src/)")
+    def search_cmd(collection: str, query: str, top_k: Optional[int], mode: Optional[str],
+                   filters: tuple):
         """Search a RAG collection."""
         try:
             engine = get_or_create_engine(collection)
-            results = engine.search(query, top_k=top_k, mode=mode)
+
+            # Parse filter options (key:value format)
+            parsed_filters = {}
+            for f in filters:
+                key, sep, value = f.partition(":")
+                if key and sep and value:
+                    parsed_filters[key] = value
+
+            results = engine.search(query, top_k=top_k, mode=mode,
+                                    filters=parsed_filters if parsed_filters else None)
 
             if not results:
                 click.echo("No results found.")
@@ -192,7 +204,8 @@ class RAGTool(llm.Toolbox):
         self,
         collection: str,
         top_k: int = DEFAULT_CONFIG["top_k"],
-        mode: str = DEFAULT_CONFIG["search_mode"]
+        mode: str = DEFAULT_CONFIG["search_mode"],
+        filters: Optional[Dict[str, str]] = None
     ):
         """
         Initialize RAG search for a specific collection.
@@ -202,10 +215,12 @@ class RAGTool(llm.Toolbox):
                         Use 'llm rag list' to see available collections.
             top_k: Number of results to return
             mode: Search mode - "hybrid", "vector", or "keyword"
+            filters: Metadata filters (e.g., {"source_contains": "src/"})
         """
         self.collection = collection
         self.top_k = top_k
         self.mode = mode
+        self.filters = filters
 
     def search(self, query: str) -> str:
         """
@@ -226,7 +241,8 @@ class RAGTool(llm.Toolbox):
         """
         try:
             engine = get_or_create_engine(self.collection)
-            results = engine.search(query, top_k=self.top_k, mode=self.mode)
+            results = engine.search(query, top_k=self.top_k, mode=self.mode,
+                                    filters=self.filters)
 
             if not results:
                 return "No relevant documents found."
@@ -274,7 +290,8 @@ def search_collection(
     collection: str,
     query: str,
     top_k: int = DEFAULT_CONFIG["top_k"],
-    mode: str = DEFAULT_CONFIG["search_mode"]
+    mode: str = DEFAULT_CONFIG["search_mode"],
+    filters: Optional[Dict[str, Any]] = None
 ) -> List[Dict[str, Any]]:
     """
     Search a RAG collection. Returns list of results.
@@ -284,12 +301,13 @@ def search_collection(
         query: Search query string
         top_k: Number of results to return
         mode: Search mode - "hybrid", "vector", or "keyword"
+        filters: Metadata filters (e.g., {"source_contains": "src/"})
 
     Returns:
         List of result dicts with: id, content, metadata (source, chunk_index, etc.)
     """
     engine = get_or_create_engine(collection)
-    return engine.search(query, top_k=top_k, mode=mode)
+    return engine.search(query, top_k=top_k, mode=mode, filters=filters)
 
 
 def add_to_collection(
