@@ -1053,29 +1053,7 @@ class RAGEngine:
             if embeddings_list and i < len(embeddings_list):
                 id_to_embedding[doc_id] = embeddings_list[i]
 
-        # Apply MMR if diversity is enabled
-        if use_mmr and id_to_embedding and len(final_ids) > 1:
-            from llm_tools_rag.diversity import maximal_marginal_relevance
-
-            # Get embeddings in final_ids order (only for IDs that have embeddings)
-            ordered_embeddings = []
-            valid_ids = []
-            for doc_id in final_ids:
-                if doc_id in id_to_embedding:
-                    ordered_embeddings.append(id_to_embedding[doc_id])
-                    valid_ids.append(doc_id)
-
-            if ordered_embeddings:
-                # Reorder using MMR
-                final_ids = maximal_marginal_relevance(
-                    query_embedding=query_embeddings[0],
-                    embeddings=ordered_embeddings,
-                    ids=valid_ids,
-                    lambda_mult=diversity_lambda,
-                    k=top_k
-                )
-
-        # Apply cross-encoder reranker if enabled
+        # Apply cross-encoder reranker FIRST (scores all candidates accurately)
         reranker_model = self.config.get_reranker_model()
         if reranker_model and len(final_ids) > 1:
             try:
@@ -1100,13 +1078,36 @@ class RAGEngine:
                         top_k=reranker_top_k
                     )
             except ImportError:
-                # sentence-transformers not installed - skip reranking
+                # flashrank not installed - skip reranking
                 pass
             except Exception as e:
                 # Reranking failed - log warning and continue with original order
                 print(f"Warning: Reranking failed: {e}")
 
-        # Re-order results according to final_ids (preserves RRF/MMR/reranker ranking)
+        # Apply MMR AFTER reranking (diversify the top-k from accurately scored results)
+        # This ensures final results are both relevant AND diverse
+        if use_mmr and id_to_embedding and len(final_ids) > 1:
+            from llm_tools_rag.diversity import maximal_marginal_relevance
+
+            # Get embeddings in final_ids order (only for IDs that have embeddings)
+            ordered_embeddings = []
+            valid_ids = []
+            for doc_id in final_ids:
+                if doc_id in id_to_embedding:
+                    ordered_embeddings.append(id_to_embedding[doc_id])
+                    valid_ids.append(doc_id)
+
+            if ordered_embeddings:
+                # Reorder using MMR
+                final_ids = maximal_marginal_relevance(
+                    query_embedding=query_embeddings[0],
+                    embeddings=ordered_embeddings,
+                    ids=valid_ids,
+                    lambda_mult=diversity_lambda,
+                    k=top_k
+                )
+
+        # Re-order results according to final_ids (preserves RRF/reranker/MMR ranking)
         results = []
         sources_set = set()
 

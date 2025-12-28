@@ -47,7 +47,7 @@ DEFAULT_CONFIG = {
     "vector_weight": 0.7,
     "keyword_weight": 0.3,
     "diversity_lambda": 1.0,  # MMR: 1.0=relevance-only (disabled), 0.5=balanced, 0.0=diversity-only
-    "reranker_model": "BAAI/bge-reranker-v2-m3",  # Cross-encoder reranker (None to disable)
+    "reranker_model": "ms-marco-MultiBERT-L-12",  # FlashRank multilingual reranker (None to disable)
     "reranker_top_k": None,  # None=use top_k, int=separate limit for reranker output
     "query_aware_weights": True,  # Enable dynamic weight adjustment based on query type
     "contextual_headers": True,  # Prepend source context to chunks before embedding

@@ -1,64 +1,67 @@
 """
-Cross-encoder reranking for improved relevance.
+Cross-encoder reranking for improved relevance using FlashRank.
 
-Cross-encoders score (query, document) pairs directly, providing more accurate
-relevance judgments than embedding similarity alone. They are embedding-model
-agnostic - any cross-encoder works with any embedding model.
+FlashRank uses ONNX runtime instead of PyTorch, making it lightweight (~4-150MB)
+compared to sentence-transformers (~3GB with CUDA dependencies).
 
-Default model: BAAI/bge-reranker-v2-m3
-- Multilingual: 100+ languages (handles German, Chinese, etc.)
-- High quality: MIRACL score 69.32
-- Size: ~560MB download on first use
+Available models:
+- ms-marco-TinyBERT-L-2-v2: ~4MB, ultra-fast (default)
+- ms-marco-MiniLM-L-12-v2: ~34MB, best quality for English
+- ms-marco-MultiBERT-L-12: ~150MB, multilingual (100+ languages)
+- rank-T5-flan: ~110MB, best zero-shot performance
 """
 
 from typing import List, Optional
 
-# Lazy-loaded cross-encoder instance
-_cross_encoder = None
-_cross_encoder_model_name = None
+# Lazy-loaded ranker instance
+_ranker = None
+_ranker_model_name = None
 
 
-def _get_cross_encoder(model_name: str):
+def _get_ranker(model_name: str, max_length: int = 512):
     """
-    Get or create CrossEncoder instance (lazy-loaded).
+    Get or create FlashRank Ranker instance (lazy-loaded).
 
-    The model is loaded on first use and cached for subsequent calls.
-    Model files are downloaded automatically from HuggingFace on first use.
+    The model is downloaded on first use and cached locally.
 
     Args:
-        model_name: HuggingFace model ID (e.g., "BAAI/bge-reranker-v2-m3")
+        model_name: FlashRank model name (e.g., "ms-marco-MultiBERT-L-12")
+        max_length: Maximum input length for the model
 
     Returns:
-        CrossEncoder instance
+        FlashRank Ranker instance
     """
-    global _cross_encoder, _cross_encoder_model_name
+    global _ranker, _ranker_model_name
 
-    if _cross_encoder is None or _cross_encoder_model_name != model_name:
-        from sentence_transformers import CrossEncoder
-        _cross_encoder = CrossEncoder(model_name)
-        _cross_encoder_model_name = model_name
+    if _ranker is None or _ranker_model_name != model_name:
+        from flashrank import Ranker
+        _ranker = Ranker(model_name=model_name, max_length=max_length)
+        _ranker_model_name = model_name
 
-    return _cross_encoder
+    return _ranker
 
 
 def rerank(
     query: str,
     documents: List[str],
     ids: List[str],
-    model_name: str = "BAAI/bge-reranker-v2-m3",
+    model_name: str = "ms-marco-MultiBERT-L-12",
     top_k: Optional[int] = None
 ) -> List[str]:
     """
     Rerank documents using cross-encoder relevance scores.
 
-    Cross-encoders process (query, document) pairs together, allowing them to
-    capture fine-grained relevance signals that bi-encoder embeddings miss.
+    Uses FlashRank's ONNX-based cross-encoders for fast CPU inference
+    without heavy PyTorch/CUDA dependencies.
 
     Args:
         query: The search query
         documents: List of document texts to rerank
         ids: List of document IDs corresponding to documents
-        model_name: HuggingFace cross-encoder model ID
+        model_name: FlashRank model name:
+            - "ms-marco-TinyBERT-L-2-v2": ~4MB, fastest
+            - "ms-marco-MiniLM-L-12-v2": ~34MB, best English
+            - "ms-marco-MultiBERT-L-12": ~150MB, multilingual (default)
         top_k: Number of top results to return (None = return all)
 
     Returns:
@@ -81,28 +84,32 @@ def rerank(
         # Mismatch - return original order
         return ids[:top_k] if top_k else ids
 
-    # Get cross-encoder (lazy-loaded)
-    cross_encoder = _get_cross_encoder(model_name)
+    # Get ranker (lazy-loaded)
+    ranker = _get_ranker(model_name)
 
-    # Create (query, document) pairs for scoring
-    pairs = [(query, doc) for doc in documents]
+    # Create passages in FlashRank format
+    from flashrank import RerankRequest
+    passages = [
+        {"id": doc_id, "text": doc_text}
+        for doc_id, doc_text in zip(ids, documents)
+    ]
 
-    # Get relevance scores
-    scores = cross_encoder.predict(pairs)
+    # Rerank
+    rerank_request = RerankRequest(query=query, passages=passages)
+    results = ranker.rerank(rerank_request)
 
-    # Sort by score (descending) and extract IDs
-    scored = sorted(zip(ids, scores), key=lambda x: x[1], reverse=True)
-    result = [doc_id for doc_id, _ in scored]
+    # Extract reordered IDs
+    result_ids = [r["id"] for r in results]
 
     # Apply top_k limit if specified
-    return result[:top_k] if top_k else result
+    return result_ids[:top_k] if top_k else result_ids
 
 
 def rerank_with_scores(
     query: str,
     documents: List[str],
     ids: List[str],
-    model_name: str = "BAAI/bge-reranker-v2-m3",
+    model_name: str = "ms-marco-MultiBERT-L-12",
     top_k: Optional[int] = None
 ) -> List[tuple]:
     """
@@ -114,7 +121,7 @@ def rerank_with_scores(
         query: The search query
         documents: List of document texts to rerank
         ids: List of document IDs corresponding to documents
-        model_name: HuggingFace cross-encoder model ID
+        model_name: FlashRank model name
         top_k: Number of top results to return (None = return all)
 
     Returns:
@@ -123,9 +130,16 @@ def rerank_with_scores(
     if not documents or len(documents) != len(ids):
         return [(doc_id, 0.0) for doc_id in (ids[:top_k] if top_k else ids)]
 
-    cross_encoder = _get_cross_encoder(model_name)
-    pairs = [(query, doc) for doc in documents]
-    scores = cross_encoder.predict(pairs)
+    ranker = _get_ranker(model_name)
 
-    scored = sorted(zip(ids, scores), key=lambda x: x[1], reverse=True)
+    from flashrank import RerankRequest
+    passages = [
+        {"id": doc_id, "text": doc_text}
+        for doc_id, doc_text in zip(ids, documents)
+    ]
+
+    rerank_request = RerankRequest(query=query, passages=passages)
+    results = ranker.rerank(rerank_request)
+
+    scored = [(r["id"], r["score"]) for r in results]
     return scored[:top_k] if top_k else scored

@@ -77,7 +77,7 @@ class TestRerankerModule:
             query="test query",
             documents=[],
             ids=["id1", "id2"],
-            model_name="BAAI/bge-reranker-v2-m3"
+            model_name="ms-marco-MultiBERT-L-12"
         )
         # Empty documents returns the original ids list
         assert result == ["id1", "id2"]
@@ -90,7 +90,7 @@ class TestRerankerModule:
             query="test query",
             documents=["doc1"],
             ids=["id1", "id2"],  # More ids than docs
-            model_name="BAAI/bge-reranker-v2-m3"
+            model_name="ms-marco-MultiBERT-L-12"
         )
         # Mismatched lengths returns original ids
         assert result == ["id1", "id2"]
@@ -103,7 +103,7 @@ class TestRerankerModule:
             query="test query",
             documents=[],
             ids=["id1", "id2", "id3"],
-            model_name="BAAI/bge-reranker-v2-m3",
+            model_name="ms-marco-MultiBERT-L-12",
             top_k=2
         )
         assert len(result) == 2
@@ -116,7 +116,7 @@ class TestConfigIntegration:
         """Config should have correct defaults for new features."""
         from llm_tools_rag.config import DEFAULT_CONFIG
 
-        assert DEFAULT_CONFIG["reranker_model"] == "BAAI/bge-reranker-v2-m3"
+        assert DEFAULT_CONFIG["reranker_model"] == "ms-marco-MultiBERT-L-12"
         assert DEFAULT_CONFIG["reranker_top_k"] is None
         assert DEFAULT_CONFIG["query_aware_weights"] is True
         assert DEFAULT_CONFIG["contextual_headers"] is True
