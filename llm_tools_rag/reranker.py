@@ -13,6 +13,8 @@ Available models:
 
 from typing import List, Optional
 
+from llm_tools_rag.config import get_rag_config_dir
+
 # Lazy-loaded ranker instance
 _ranker = None
 _ranker_model_name = None
@@ -35,7 +37,10 @@ def _get_ranker(model_name: str, max_length: int = 512):
 
     if _ranker is None or _ranker_model_name != model_name:
         from flashrank import Ranker
-        _ranker = Ranker(model_name=model_name, max_length=max_length)
+        # Use llm-tools-rag config directory for model cache
+        cache_dir = get_rag_config_dir() / ".cache"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        _ranker = Ranker(model_name=model_name, cache_dir=str(cache_dir), max_length=max_length)
         _ranker_model_name = model_name
 
     return _ranker
