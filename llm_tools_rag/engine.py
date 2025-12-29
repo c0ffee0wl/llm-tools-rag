@@ -17,6 +17,7 @@ from .loaders import DocumentLoader
 from .chunking import RecursiveCharacterTextSplitter, create_splitter_for_file
 from .dedup import Deduplicator
 from .search import HybridSearch, create_hybrid_searcher
+from .progress import progress_status, print_warning
 
 
 class RAGEngine:
@@ -170,7 +171,7 @@ class RAGEngine:
                     if metadata and "hash" in metadata:
                         self.deduplicator.add_hash(metadata["hash"])
         except Exception as e:
-            print(f"Warning: Failed to load existing hashes: {e}")
+            print_warning(f"Failed to load existing hashes: {e}")
 
     def _rebuild_bm25_from_chromadb(self):
         """Rebuild BM25 index and ID mappings from existing ChromaDB documents."""
@@ -259,18 +260,19 @@ class RAGEngine:
 
             # Backfill missing bm25_id metadata for old collections
             if need_backfill:
-                print(f"Backfilling bm25_id metadata for {len(need_backfill)} documents...")
-                for chroma_id, bm25_id, metadata in need_backfill:
-                    # Update metadata with bm25_id
-                    metadata["bm25_id"] = str(bm25_id)
-                    try:
-                        # ChromaDB update requires all fields
-                        self.chroma_collection.update(
-                            ids=[chroma_id],
-                            metadatas=[metadata]
-                        )
-                    except Exception as e:
-                        print(f"Warning: Failed to backfill bm25_id for {chroma_id}: {e}")
+                with progress_status(f"Backfilling metadata for {len(need_backfill)} documents...") as status:
+                    for idx, (chroma_id, bm25_id, metadata) in enumerate(need_backfill):
+                        status.update(f"[cyan]Backfilling metadata: {idx + 1}/{len(need_backfill)}[/]")
+                        # Update metadata with bm25_id
+                        metadata["bm25_id"] = str(bm25_id)
+                        try:
+                            # ChromaDB update requires all fields
+                            self.chroma_collection.update(
+                                ids=[chroma_id],
+                                metadatas=[metadata]
+                            )
+                        except Exception as e:
+                            print_warning(f"Failed to backfill bm25_id for {chroma_id}: {e}")
 
             if bm25_docs:
                 self.hybrid_search.add_documents(bm25_docs)
@@ -284,7 +286,7 @@ class RAGEngine:
             self.bm25_available = True
 
         except Exception as e:
-            print(f"Warning: Failed to rebuild BM25 index: {e}")
+            print_warning(f"Failed to rebuild BM25 index: {e}")
             self.bm25_available = False
 
     def _get_collection_state_hash(self) -> str:
@@ -368,7 +370,7 @@ class RAGEngine:
 
         except Exception as e:
             # Non-fatal - just log warning
-            print(f"Warning: Failed to save BM25 cache: {e}")
+            print_warning(f"Failed to save BM25 cache: {e}")
 
     def _load_bm25_cache(self) -> bool:
         """
@@ -386,7 +388,7 @@ class RAGEngine:
 
             # Check minimum size (32 bytes for signature + some data)
             if len(cache_bytes) < 33:
-                print(f"Warning: BM25 cache file too small, rebuilding...")
+                print_warning("BM25 cache file too small, rebuilding...")
                 return False
 
             # Split signature and data
@@ -398,7 +400,7 @@ class RAGEngine:
             expected_signature = hashlib.sha256(signing_key + serialized).digest()
 
             if stored_signature != expected_signature:
-                print(f"Warning: BM25 cache signature invalid (corrupted or tampered), rebuilding...")
+                print_warning("BM25 cache signature invalid (corrupted or tampered), rebuilding...")
                 return False
 
             # Signature valid - deserialize
@@ -422,7 +424,7 @@ class RAGEngine:
             self.bm25_available = True
             return True
         except Exception as e:
-            print(f"Warning: Failed to load BM25 cache: {e}")
+            print_warning(f"Failed to load BM25 cache: {e}")
             return False
 
     def _embed_chunks(self, chunks: List[str], max_retries: int = 3, max_memory_mb: int = 500) -> List[List[float]]:
@@ -465,62 +467,59 @@ class RAGEngine:
             # Batch embedding supported - use optimal batch size
             batch_size = self._calculate_batch_size(len(chunks))
 
-            print(f"Embedding {len(chunks)} chunks in batches of {batch_size}...")
-            for i in range(0, len(chunks), batch_size):
-                batch = chunks[i:i + batch_size]
+            with progress_status(f"Embedding {len(chunks)} chunks...") as status:
+                for i in range(0, len(chunks), batch_size):
+                    batch = chunks[i:i + batch_size]
 
-                # Retry logic with exponential backoff
-                for retry in range(max_retries):
-                    try:
-                        batch_embeddings = self.embedding_model.embed_batch(batch)
-                        embeddings.extend(batch_embeddings)
-                        if len(chunks) > batch_size:
-                            print(f"  Progress: {min(i + batch_size, len(chunks))}/{len(chunks)}")
-                        break  # Success, exit retry loop
-                    except Exception as e:
-                        if retry < max_retries - 1:
-                            wait_time = 2 ** retry  # Exponential backoff: 1s, 2s, 4s
-                            print(f"  Warning: Batch embedding failed (attempt {retry + 1}/{max_retries}), retrying in {wait_time}s: {e}")
-                            time.sleep(wait_time)
-                        else:
-                            # Final attempt failed, fallback to one-by-one
-                            print(f"  Warning: Batch embedding failed after {max_retries} attempts, falling back to sequential")
-                            for chunk_idx, chunk in enumerate(batch):
-                                chunk_num = i + chunk_idx + 1  # Global chunk number
-                                for seq_retry in range(max_retries):
-                                    try:
-                                        embeddings.append(self.embedding_model.embed(chunk))
-                                        break
-                                    except Exception as seq_e:
-                                        if seq_retry < max_retries - 1:
-                                            time.sleep(2 ** seq_retry)
-                                        else:
-                                            # Provide detailed error context
-                                            chunk_preview = chunk[:100] + "..." if len(chunk) > 100 else chunk
-                                            raise RuntimeError(
-                                                f"Failed to embed chunk {chunk_num}/{len(chunks)} "
-                                                f"after {max_retries} attempts. "
-                                                f"Content preview: '{chunk_preview}'. "
-                                                f"Error: {seq_e}"
-                                            ) from seq_e
+                    # Retry logic with exponential backoff
+                    for retry in range(max_retries):
+                        try:
+                            batch_embeddings = self.embedding_model.embed_batch(batch)
+                            embeddings.extend(batch_embeddings)
+                            status.update(f"[cyan]Embedding: {min(i + batch_size, len(chunks))}/{len(chunks)} chunks[/]")
+                            break  # Success, exit retry loop
+                        except Exception as e:
+                            if retry < max_retries - 1:
+                                wait_time = 2 ** retry  # Exponential backoff: 1s, 2s, 4s
+                                print_warning(f"Batch embedding failed (attempt {retry + 1}/{max_retries}), retrying in {wait_time}s: {e}")
+                                time.sleep(wait_time)
+                            else:
+                                # Final attempt failed, fallback to one-by-one
+                                print_warning(f"Batch embedding failed after {max_retries} attempts, falling back to sequential")
+                                for chunk_idx, chunk in enumerate(batch):
+                                    chunk_num = i + chunk_idx + 1  # Global chunk number
+                                    for seq_retry in range(max_retries):
+                                        try:
+                                            embeddings.append(self.embedding_model.embed(chunk))
+                                            status.update(f"[cyan]Embedding: {chunk_num}/{len(chunks)} chunks[/]")
+                                            break
+                                        except Exception as seq_e:
+                                            if seq_retry < max_retries - 1:
+                                                time.sleep(2 ** seq_retry)
+                                            else:
+                                                # Provide detailed error context
+                                                chunk_preview = chunk[:100] + "..." if len(chunk) > 100 else chunk
+                                                raise RuntimeError(
+                                                    f"Failed to embed chunk {chunk_num}/{len(chunks)} "
+                                                    f"after {max_retries} attempts. "
+                                                    f"Content preview: '{chunk_preview}'. "
+                                                    f"Error: {seq_e}"
+                                                ) from seq_e
         else:
             # No batch support - embed one by one with progress indicator and retry
-            if len(chunks) > 10:
-                print(f"Embedding {len(chunks)} chunks sequentially...")
-            for i, chunk in enumerate(chunks):
-                for retry in range(max_retries):
-                    try:
-                        embeddings.append(self.embedding_model.embed(chunk))
-                        break
-                    except Exception as e:
-                        if retry < max_retries - 1:
-                            wait_time = 2 ** retry
-                            time.sleep(wait_time)
-                        else:
-                            raise RuntimeError(f"Failed to embed chunk {i + 1} after {max_retries} attempts: {e}")
-
-                if len(chunks) > 10 and (i + 1) % 10 == 0:
-                    print(f"  Progress: {i + 1}/{len(chunks)}")
+            with progress_status(f"Embedding {len(chunks)} chunks...") as status:
+                for i, chunk in enumerate(chunks):
+                    for retry in range(max_retries):
+                        try:
+                            embeddings.append(self.embedding_model.embed(chunk))
+                            status.update(f"[cyan]Embedding: {i + 1}/{len(chunks)} chunks[/]")
+                            break
+                        except Exception as e:
+                            if retry < max_retries - 1:
+                                wait_time = 2 ** retry
+                                time.sleep(wait_time)
+                            else:
+                                raise RuntimeError(f"Failed to embed chunk {i + 1} after {max_retries} attempts: {e}")
 
         return embeddings
 
@@ -680,7 +679,7 @@ class RAGEngine:
                         self._rebuild_bm25_from_chromadb()
                         self._save_bm25_cache()
                 except Exception as e:
-                    print(f"Warning: Failed to delete old document chunks during refresh: {e}")
+                    print_warning(f"Failed to delete old document chunks during refresh: {e}")
 
             # Create appropriate splitter based on file type
             if self.loader.is_protocol_path(path) or not Path(path).exists():
@@ -793,7 +792,7 @@ class RAGEngine:
                     self.chroma_collection.delete(ids=doc_ids)
                 except Exception as rollback_error:
                     # Log rollback failure but raise original error
-                    print(f"Warning: Failed to rollback ChromaDB after BM25 error: {rollback_error}")
+                    print_warning(f"Failed to rollback ChromaDB after BM25 error: {rollback_error}")
 
                 # Restore mapping state
                 self.bm25_to_chroma = saved_bm25_to_chroma
@@ -857,7 +856,7 @@ class RAGEngine:
 
         # Fall back to vector-only if BM25 is not available
         if mode in ("hybrid", "keyword") and not self.bm25_available:
-            print("Warning: BM25 index not available, falling back to vector-only search")
+            print_warning("BM25 index not available, falling back to vector-only search")
             mode = "vector"
 
         # Get query embedding
@@ -1082,7 +1081,7 @@ class RAGEngine:
                 pass
             except Exception as e:
                 # Reranking failed - log warning and continue with original order
-                print(f"Warning: Reranking failed: {e}")
+                print_warning(f"Reranking failed: {e}")
 
         # Apply MMR AFTER reranking (diversify the top-k from accurately scored results)
         # This ensures final results are both relevant AND diverse
@@ -1390,7 +1389,7 @@ class RAGEngine:
         try:
             self.chroma_client.delete_collection(self.collection_name)
         except Exception as e:
-            print(f"Warning: Failed to delete ChromaDB collection: {e}")
+            print_warning(f"Failed to delete ChromaDB collection: {e}")
         finally:
             self._release_lock()
 

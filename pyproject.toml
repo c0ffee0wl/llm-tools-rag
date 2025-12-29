@@ -15,6 +15,7 @@ dependencies = [
     "beautifulsoup4>=4.11",
     "nltk>=3.8",
     "flashrank>=0.2.0",
+    "rich>=13.0",
 ]
 
 [project.entry-points.llm]
