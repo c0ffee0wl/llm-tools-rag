@@ -280,6 +280,26 @@ def get_rag_config_dir() -> Path:
     return rag_dir
 
 
+def get_rag_cache_dir() -> Path:
+    """
+    Get the RAG cache directory following XDG Base Directory Specification.
+
+    Uses $XDG_CACHE_HOME/llm-tools-rag/ or ~/.cache/llm-tools-rag/
+
+    Returns:
+        Path to RAG cache directory
+    """
+    import os
+    xdg_cache_home = os.environ.get("XDG_CACHE_HOME")
+    if xdg_cache_home:
+        cache_base = Path(xdg_cache_home)
+    else:
+        cache_base = Path.home() / ".cache"
+    cache_dir = cache_base / "llm-tools-rag"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    return cache_dir
+
+
 def list_collections() -> List[str]:
     """
     List all RAG collections.
