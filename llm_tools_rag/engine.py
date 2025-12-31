@@ -4,7 +4,7 @@ RAG engine combining ChromaDB vector store with BM25 keyword search.
 
 import llm
 from pathlib import Path
-from typing import List, Dict, Any, Optional, Tuple
+from typing import List, Dict, Any, Optional
 import chromadb
 from chromadb.config import Settings
 import fcntl
@@ -16,7 +16,7 @@ from .config import RAGConfig, get_rag_config_dir
 from .loaders import DocumentLoader
 from .chunking import RecursiveCharacterTextSplitter, create_splitter_for_file
 from .dedup import Deduplicator
-from .search import HybridSearch, create_hybrid_searcher
+from .search import create_hybrid_searcher
 from .progress import progress_status, print_warning
 
 

@@ -4,7 +4,7 @@ Matches aichat's approach to avoid reindexing identical content.
 """
 
 import hashlib
-from typing import Dict, Set, List, Tuple
+from typing import Set, List, Tuple
 
 
 class Deduplicator:

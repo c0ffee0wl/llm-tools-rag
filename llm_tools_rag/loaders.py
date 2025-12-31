@@ -7,10 +7,9 @@ Also supports recursive URL crawling with ** syntax.
 import subprocess
 import shutil
 import shlex
-import re
 import time
 import os
-from typing import Dict, Optional, List, Tuple
+from typing import Dict, Optional, List
 from pathlib import Path
 from urllib.parse import urlparse, urljoin, urldefrag
 from dataclasses import dataclass
@@ -213,7 +212,6 @@ class DocumentLoader:
         Returns JSON array of {filename, content} objects.
         """
         import tempfile
-        import json
 
         if self._is_remote_git_url(path):
             # Clone to temp directory, run yek, clean up
@@ -260,7 +258,7 @@ class DocumentLoader:
         except subprocess.CalledProcessError as e:
             raise ValueError(f"yek failed: {e.stderr}")
         except subprocess.TimeoutExpired:
-            raise ValueError(f"yek timed out after 5 minutes")
+            raise ValueError("yek timed out after 5 minutes")
 
     def _load_via_protocol_raw(self, protocol: str, path: str) -> str:
         """Run loader command and return raw output."""

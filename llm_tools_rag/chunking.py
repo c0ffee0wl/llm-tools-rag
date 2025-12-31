@@ -3,7 +3,7 @@ Text chunking with language-aware recursive character splitting.
 Ported from aichat's RecursiveCharacterTextSplitter implementation.
 """
 
-from typing import List, Dict, Callable, Optional
+from typing import List, Callable, Optional
 from pathlib import Path
 
 

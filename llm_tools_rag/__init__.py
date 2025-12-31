@@ -97,7 +97,7 @@ def register_commands(cli):
             click.echo(f"Collection: {stats['collection']}")
             click.echo(f"Total chunks: {stats['total_chunks']}")
             click.echo(f"Unique documents: {stats['unique_documents']}")
-            click.echo(f"\nConfiguration:")
+            click.echo("\nConfiguration:")
             for key, value in stats['config'].items():
                 if key != "document_loaders":
                     click.echo(f"  {key}: {value}")
@@ -275,6 +275,9 @@ __version__ = "0.1.0"
 __all__ = [
     # Tool class
     'RAGTool',
+    # Core classes and functions
+    'RAGEngine',
+    'get_rag_config_dir',
     # Library API for external consumers
     'search_collection',
     'add_to_collection',

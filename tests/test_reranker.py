@@ -1,6 +1,5 @@
 """Tests for reranker and query_analyzer modules."""
 
-import pytest
 from llm_tools_rag.query_analyzer import analyze_query, get_query_type
 
 
@@ -123,7 +122,7 @@ class TestConfigIntegration:
 
     def test_config_validation_reranker_model(self):
         """Config should validate reranker_model type."""
-        from llm_tools_rag.config import RAGConfig, deep_merge, DEFAULT_CONFIG
+        from llm_tools_rag.config import deep_merge, DEFAULT_CONFIG
         import tempfile
         import yaml
         import os
