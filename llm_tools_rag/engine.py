@@ -139,12 +139,56 @@ class RAGEngine:
                 f"Create a new collection or use the same model."
             )
 
-        # Store embedding model in collection metadata if not already stored
+        # Get embedding dimension by generating a test embedding
+        # This is done once at initialization to enable dimension validation
+        self._embedding_dimension = None
+        try:
+            test_embedding = self.embedding_model.embed("test")
+            # Handle both flat and nested embedding formats
+            if hasattr(test_embedding, '__len__') and len(test_embedding) > 0:
+                first_elem = test_embedding[0]
+                # Check if nested (list of embeddings) vs flat (single embedding)
+                if hasattr(first_elem, '__len__') and not isinstance(first_elem, (str, bytes)):
+                    self._embedding_dimension = len(first_elem)
+                else:
+                    self._embedding_dimension = len(test_embedding)
+        except Exception:
+            pass  # _embedding_dimension remains None
+
+        # Check embedding dimension consistency with existing collection
+        stored_dimension = collection_metadata.get("embedding_dimension")
+        if stored_dimension and self._embedding_dimension:
+            try:
+                stored_dim_int = int(stored_dimension)
+            except (ValueError, TypeError):
+                # Corrupted metadata - log warning and skip dimension check
+                print_warning(f"Invalid embedding_dimension in metadata: {stored_dimension!r}, skipping validation")
+                stored_dim_int = None
+
+            if stored_dim_int is not None and stored_dim_int != self._embedding_dimension:
+                raise ValueError(
+                    f"Collection '{collection_name}' uses {stored_dim_int}-dimensional embeddings "
+                    f"but model '{actual_model_id}' produces {self._embedding_dimension}-dimensional embeddings. "
+                    f"Cannot mix embedding dimensions in one collection. "
+                    f"Create a new collection or use a compatible model."
+                )
+
+        # Store embedding model and dimension in collection metadata
+        # Update if: (1) new collection, or (2) existing collection missing dimension
+        needs_metadata_update = False
+        metadata = dict(collection_metadata) if collection_metadata else {}
+        metadata["description"] = f"RAG collection: {collection_name}"
+
         if not stored_model and actual_model_id:
-            self.chroma_collection.modify(metadata={
-                "description": f"RAG collection: {collection_name}",
-                "embedding_model": actual_model_id
-            })
+            metadata["embedding_model"] = actual_model_id
+            needs_metadata_update = True
+
+        if not stored_dimension and self._embedding_dimension:
+            metadata["embedding_dimension"] = str(self._embedding_dimension)
+            needs_metadata_update = True
+
+        if needs_metadata_update:
+            self.chroma_collection.modify(metadata=metadata)
 
         # Load existing document hashes for deduplication
         self._load_existing_hashes()

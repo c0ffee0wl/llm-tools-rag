@@ -179,7 +179,7 @@ class BM25Index:
             top_k: Number of results to return
 
         Returns:
-            List of document IDs ranked by BM25 score
+            List of document IDs ranked by BM25 score (excludes zero-score documents)
         """
         if not self.bm25 or not self.corpus_tokens:
             return []
@@ -187,9 +187,10 @@ class BM25Index:
         query_tokens = tokenize(query)
         scores = self.bm25.get_scores(query_tokens)
 
-        # Get top_k indices
+        # Get indices sorted by score (descending), filtering out zero scores
+        # Documents with score=0 have no keyword relevance and shouldn't be returned
         top_indices = sorted(
-            range(len(scores)),
+            (i for i in range(len(scores)) if scores[i] > 0),
             key=lambda i: scores[i],
             reverse=True
         )[:top_k]
