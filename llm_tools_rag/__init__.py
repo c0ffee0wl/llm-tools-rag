@@ -80,7 +80,9 @@ def register_commands(cli):
             for i, result in enumerate(results, 1):
                 click.echo(f"\n--- Result {i} ---")
                 click.echo(f"Source: {result['metadata'].get('source', 'unknown')}")
-                click.echo(f"Content:\n{result['content'][:500]}...")
+                content = result['content']
+                truncated = content[:500] + "..." if len(content) > 500 else content
+                click.echo(f"Content:\n{truncated}")
 
         except Exception as e:
             click.echo(f"Error: {e}", err=True)

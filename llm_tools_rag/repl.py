@@ -110,7 +110,9 @@ class RAGRepl(cmd.Cmd):
             for i, result in enumerate(results, 1):
                 print(f"\n--- Result {i} ---")
                 print(f"Source: {result['metadata'].get('source', 'unknown')}")
-                print(f"Content:\n{result['content'][:500]}...")
+                content = result['content']
+                truncated = content[:500] + "..." if len(content) > 500 else content
+                print(f"Content:\n{truncated}")
         except Exception as e:
             print(f"Error: {e}")
 

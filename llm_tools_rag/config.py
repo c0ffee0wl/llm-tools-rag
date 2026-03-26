@@ -85,6 +85,25 @@ class RAGConfig:
             self._config_file = config_dir / "config.yaml"
             self.load()
 
+    @classmethod
+    def reset(cls):
+        """Reset the singleton, forcing config reload on next access.
+
+        Useful for tests and long-running processes that need to
+        pick up config file changes.
+        """
+        cls._instance = None
+        cls._config = {}
+        cls._config_file = None
+
+    def reload(self) -> Dict[str, Any]:
+        """Reload configuration from disk without resetting the singleton.
+
+        Returns:
+            Updated configuration dictionary
+        """
+        return self.load()
+
     def load(self) -> Dict[str, Any]:
         """
         Load global configuration from file.

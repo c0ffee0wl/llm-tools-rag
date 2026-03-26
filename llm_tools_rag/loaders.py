@@ -448,8 +448,8 @@ class DocumentLoader:
         if extension and extension in self.loaders:
             fd, temp_path = tempfile.mkstemp(prefix='rag-download-', suffix=f'.{extension}')
             try:
-                os.write(fd, response.content)
-                os.close(fd)
+                with os.fdopen(fd, 'wb') as tmp_file:
+                    tmp_file.write(response.content)
                 return self._load_via_protocol(extension, temp_path)
             finally:
                 if os.path.exists(temp_path):
@@ -528,6 +528,7 @@ class DocumentLoader:
         to_visit = [(base_url, 0)]  # (url, depth)
         documents = []
         total_content_bytes = 0  # Track total memory usage
+        request_count = 0
 
         print(f"Crawling {base_url} recursively (max depth: {max_depth}, max pages: {max_pages})...")
 
@@ -540,6 +541,11 @@ class DocumentLoader:
             visited.add(url)
 
             try:
+                # Rate limiting: wait 1 second between requests (skip first)
+                if request_count > 0:
+                    time.sleep(1)
+                request_count += 1
+
                 # Fetch page with timeout
                 response = requests.get(url, timeout=10, headers={'User-Agent': DEFAULT_USER_AGENT})
                 response.raise_for_status()
@@ -555,9 +561,6 @@ class DocumentLoader:
                 content_type = response.headers.get('Content-Type', '')
                 if 'text/html' not in content_type:
                     continue
-
-                # Rate limiting: wait 1 second between HTML requests (after content-type check)
-                time.sleep(1)
 
                 # Parse HTML
                 soup = BeautifulSoup(response.text, 'html.parser')
@@ -643,10 +646,8 @@ def check_loader_dependencies() -> Dict[str, bool]:
         for loader_type in loader_types:
             status[loader_type] = available
 
-    # git loader requires both yek AND jq (piped together)
-    yek_available = shutil.which("yek") is not None
-    jq_available = shutil.which("jq") is not None
-    status["git"] = yek_available and jq_available
+    # git loader requires yek only (JSON is parsed in Python, not via jq)
+    status["git"] = shutil.which("yek") is not None
 
     return status
 
@@ -660,16 +661,9 @@ def get_missing_dependencies() -> Dict[str, str]:
     """
     missing = {}
 
-    # Check git loader (requires both yek and jq)
-    yek_available = shutil.which("yek") is not None
-    jq_available = shutil.which("jq") is not None
-    if not yek_available or not jq_available:
-        parts = []
-        if not yek_available:
-            parts.append("yek (install via cargo: cargo install yek)")
-        if not jq_available:
-            parts.append("jq (install via: sudo apt-get install jq)")
-        missing["git"] = f"Missing: {', '.join(parts)}"
+    # Check git loader (requires yek only; JSON is parsed in Python)
+    if not shutil.which("yek"):
+        missing["git"] = "Missing: yek (install via cargo: cargo install yek)"
 
     # Check other loaders
     install_commands = {

@@ -4,13 +4,14 @@ RAG engine combining ChromaDB vector store with BM25 keyword search.
 
 import llm
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 import chromadb
 from chromadb.config import Settings
 import fcntl
 import time
 import pickle
 import hashlib
+import hmac
 
 from .config import RAGConfig, get_rag_config_dir
 from .loaders import DocumentLoader
@@ -18,6 +19,9 @@ from .chunking import RecursiveCharacterTextSplitter, create_splitter_for_file
 from .dedup import Deduplicator
 from .search import create_hybrid_searcher
 from .progress import progress_status, print_warning
+
+# Module-level cache for RAGEngine instances to avoid expensive re-initialization
+_engine_cache: Dict[Tuple[str, Optional[str]], "RAGEngine"] = {}
 
 
 class RAGEngine:
@@ -405,7 +409,7 @@ class RAGEngine:
 
             # Sign with HMAC to prevent tampering
             signing_key = self._get_cache_signing_key()
-            signature = hashlib.sha256(signing_key + serialized).digest()
+            signature = hmac.new(signing_key, serialized, hashlib.sha256).digest()
 
             # Write signature + data atomically
             with open(self.bm25_cache_file, 'wb') as f:
@@ -441,9 +445,9 @@ class RAGEngine:
 
             # Verify signature to prevent tampering/corruption
             signing_key = self._get_cache_signing_key()
-            expected_signature = hashlib.sha256(signing_key + serialized).digest()
+            expected_signature = hmac.new(signing_key, serialized, hashlib.sha256).digest()
 
-            if stored_signature != expected_signature:
+            if not hmac.compare_digest(stored_signature, expected_signature):
                 print_warning("BM25 cache signature invalid (corrupted or tampered), rebuilding...")
                 return False
 
@@ -1441,10 +1445,16 @@ class RAGEngine:
         from .config import delete_collection
         delete_collection(self.collection_name)
 
+        # Invalidate cached engine instances for this collection
+        invalidate_engine_cache(self.collection_name)
+
 
 def get_or_create_engine(collection_name: str, embedding_model: Optional[str] = None) -> RAGEngine:
     """
     Get or create a RAG engine for a collection.
+
+    Returns a cached instance if one exists for the same
+    (collection_name, embedding_model) key.
 
     Args:
         collection_name: Name of the collection
@@ -1453,4 +1463,14 @@ def get_or_create_engine(collection_name: str, embedding_model: Optional[str] = 
     Returns:
         RAGEngine instance
     """
-    return RAGEngine(collection_name, embedding_model)
+    cache_key = (collection_name, embedding_model)
+    if cache_key not in _engine_cache:
+        _engine_cache[cache_key] = RAGEngine(collection_name, embedding_model)
+    return _engine_cache[cache_key]
+
+
+def invalidate_engine_cache(collection_name: str) -> None:
+    """Remove all cached engines for a given collection (any embedding model)."""
+    keys_to_remove = [k for k in _engine_cache if k[0] == collection_name]
+    for key in keys_to_remove:
+        del _engine_cache[key]
