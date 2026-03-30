@@ -97,7 +97,7 @@ def test_tokenize_cjk_autodetect():
 
 def test_bm25_cjk_search():
     """BM25 index should work with CJK tokenized documents."""
-    index = BM25Index()
+    index = BM25Index(algorithm="plus")
     docs = [
         (0, "搜索引擎优化"),
         (1, "数据库管理系统"),
@@ -151,7 +151,7 @@ def test_rrf_weighted():
 
 def test_bm25_index():
     """Test BM25 index functionality."""
-    index = BM25Index()
+    index = BM25Index(algorithm="plus")
 
     # Add documents
     docs = [
@@ -169,6 +169,46 @@ def test_bm25_index():
     results = index.search("quick fox", top_k=2)
     assert len(results) <= 2
     # Document 0 should rank highly (has both words)
+    assert 0 in results
+
+
+def test_bm25_plus_positive_scores():
+    """BM25Plus should return positive scores for matched terms.
+
+    Unlike BM25Okapi which can return zero scores for terms appearing
+    in many documents, BM25Plus guarantees positive scores.
+    """
+    # Create a corpus where a term appears in all documents
+    index = BM25Index(algorithm="plus")
+    docs = [
+        (0, "python programming language"),
+        (1, "python data science"),
+        (2, "python web framework"),
+    ]
+    index.add_documents(docs)
+    index.finalize()
+
+    # "python" appears in all docs -- BM25Okapi would give zero scores,
+    # but BM25Plus should still return results
+    results = index.search("python", top_k=3)
+    assert len(results) == 3  # All docs should match
+
+
+def test_bm25_okapi_algorithm():
+    """BM25Okapi algorithm should still work when explicitly selected."""
+    index = BM25Index(algorithm="okapi")
+    docs = [
+        (0, "The quick brown fox jumps over the fence"),
+        (1, "Slow green turtles swim in the ocean"),
+        (2, "The lazy cat sleeps all day long"),
+        (3, "Red birds fly south in winter time"),
+    ]
+    index.add_documents(docs)
+    index.finalize()
+
+    # "fox" appears only in doc 0, so BM25Okapi should score it positively
+    results = index.search("fox", top_k=2)
+    assert len(results) > 0
     assert 0 in results
 
 

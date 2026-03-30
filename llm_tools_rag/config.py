@@ -52,7 +52,11 @@ DEFAULT_CONFIG = {
     "reranker_max_length": None,  # None=auto-derive from chunk_size, int=explicit token limit
     "query_aware_weights": True,  # Enable dynamic weight adjustment based on query type
     "retrieval_candidates": None,  # None=auto (min(100, max(20, top_k*10))), int=explicit count
+    "bm25_algorithm": "plus",  # "plus" (positive scores for all matches) or "okapi" (classic)
     "bm25_language": None,  # None=auto-detect per text, str=NLTK language (e.g. "english", "german")
+    "near_dedup_enabled": True,   # Enable MinHash-based near-duplicate detection
+    "near_dedup_threshold": 0.8,  # Jaccard similarity threshold (0.0-1.0)
+    "near_dedup_num_perm": 128,   # Number of MinHash permutations (16-512)
     "contextual_headers": True,  # Prepend source context to chunks before embedding
     "document_loaders": {
         # Git loader: yek with jq transform to aichat format (matches aichat exactly)
@@ -222,6 +226,12 @@ class RAGConfig:
                     f"got: {retrieval_candidates}"
                 )
 
+        # Validate bm25_algorithm
+        bm25_algorithm = self._config.get("bm25_algorithm", "plus")
+        valid_bm25_algorithms = ["plus", "okapi"]
+        if bm25_algorithm not in valid_bm25_algorithms:
+            raise ValueError(f"bm25_algorithm must be one of {valid_bm25_algorithms}, got: {bm25_algorithm}")
+
         # Validate bm25_language (string or None)
         bm25_language = self._config.get("bm25_language")
         if bm25_language is not None and not isinstance(bm25_language, str):
@@ -231,6 +241,26 @@ class RAGConfig:
         query_aware_weights = self._config.get("query_aware_weights", True)
         if not isinstance(query_aware_weights, bool):
             raise ValueError(f"query_aware_weights must be a boolean, got: {type(query_aware_weights).__name__}")
+
+        # Validate near_dedup_enabled (boolean)
+        near_dedup_enabled = self._config.get("near_dedup_enabled", True)
+        if not isinstance(near_dedup_enabled, bool):
+            raise ValueError(f"near_dedup_enabled must be a boolean, got: {type(near_dedup_enabled).__name__}")
+
+        # Validate near_dedup_threshold (float, 0 < x <= 1.0)
+        near_dedup_threshold = self._config.get("near_dedup_threshold", 0.8)
+        if not isinstance(near_dedup_threshold, (int, float)) or not (0.0 < near_dedup_threshold <= 1.0):
+            raise ValueError(
+                f"near_dedup_threshold must be a number between 0 (exclusive) and 1 (inclusive), "
+                f"got: {near_dedup_threshold}"
+            )
+
+        # Validate near_dedup_num_perm (int, 16-512)
+        near_dedup_num_perm = self._config.get("near_dedup_num_perm", 128)
+        if not isinstance(near_dedup_num_perm, int) or not (16 <= near_dedup_num_perm <= 512):
+            raise ValueError(
+                f"near_dedup_num_perm must be an integer between 16 and 512, got: {near_dedup_num_perm}"
+            )
 
         # Validate contextual_headers (boolean)
         contextual_headers = self._config.get("contextual_headers", True)
@@ -312,9 +342,25 @@ class RAGConfig:
             return val
         return min(100, max(20, top_k * 10))
 
+    def get_bm25_algorithm(self) -> str:
+        """Get BM25 algorithm variant: 'plus' or 'okapi'."""
+        return self._config.get("bm25_algorithm", DEFAULT_CONFIG["bm25_algorithm"])
+
     def get_query_aware_weights(self) -> bool:
         """Get whether query-aware weight adjustment is enabled."""
         return self._config.get("query_aware_weights", DEFAULT_CONFIG["query_aware_weights"])
+
+    def get_near_dedup_enabled(self) -> bool:
+        """Get whether near-duplicate detection is enabled."""
+        return self._config.get("near_dedup_enabled", DEFAULT_CONFIG["near_dedup_enabled"])
+
+    def get_near_dedup_threshold(self) -> float:
+        """Get Jaccard similarity threshold for near-duplicate detection."""
+        return self._config.get("near_dedup_threshold", DEFAULT_CONFIG["near_dedup_threshold"])
+
+    def get_near_dedup_num_perm(self) -> int:
+        """Get number of MinHash permutations for near-duplicate detection."""
+        return self._config.get("near_dedup_num_perm", DEFAULT_CONFIG["near_dedup_num_perm"])
 
     def get_contextual_headers(self) -> bool:
         """Get whether contextual headers are prepended to chunks before embedding."""

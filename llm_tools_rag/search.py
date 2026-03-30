@@ -5,7 +5,7 @@ Algorithm ported from aichat's implementation.
 """
 
 from typing import List, Dict, Tuple, Any, Optional
-from rank_bm25 import BM25Okapi
+from rank_bm25 import BM25Okapi, BM25Plus
 import re
 
 from llm_tools_rag.config import DEFAULT_CONFIG
@@ -228,11 +228,20 @@ def reciprocal_rank_fusion(
 class BM25Index:
     """BM25 keyword search index."""
 
-    def __init__(self):
-        """Initialize empty BM25 index."""
+    def __init__(self, algorithm: str = "plus"):
+        """Initialize empty BM25 index.
+
+        Args:
+            algorithm: BM25 variant to use - "plus" (default) or "okapi".
+                       BM25Plus guarantees positive scores for matched terms,
+                       which is better for chunked document retrieval.
+        """
+        if algorithm not in ("plus", "okapi"):
+            raise ValueError(f"algorithm must be 'plus' or 'okapi', got: {algorithm!r}")
         self.corpus_tokens: List[List[str]] = []
         self.document_ids: List[int] = []
-        self.bm25: Optional[BM25Okapi] = None
+        self.algorithm = algorithm
+        self.bm25 = None
 
     def add_documents(self, documents: List[Tuple[int, str]]):
         """
@@ -254,7 +263,8 @@ class BM25Index:
         rebuilding the index multiple times (memory leak).
         """
         if self.corpus_tokens:
-            self.bm25 = BM25Okapi(self.corpus_tokens)
+            cls = BM25Plus if self.algorithm == "plus" else BM25Okapi
+            self.bm25 = cls(self.corpus_tokens)
 
     def search(self, query: str, top_k: int = 10) -> List[int]:
         """
@@ -304,7 +314,8 @@ class HybridSearch:
         self,
         vector_weight: float,
         keyword_weight: float,
-        rrf_k: int
+        rrf_k: int,
+        bm25_algorithm: str = "plus"
     ):
         """
         Initialize hybrid search.
@@ -313,11 +324,12 @@ class HybridSearch:
             vector_weight: Weight for vector search results
             keyword_weight: Weight for BM25 keyword search results
             rrf_k: RRF constant for rank fusion
+            bm25_algorithm: BM25 variant - "plus" or "okapi"
         """
         self.vector_weight = vector_weight
         self.keyword_weight = keyword_weight
         self.rrf_k = rrf_k
-        self.bm25_index = BM25Index()
+        self.bm25_index = BM25Index(algorithm=bm25_algorithm)
 
     def search(
         self,
@@ -388,5 +400,6 @@ def create_hybrid_searcher(config: Dict[str, Any]) -> HybridSearch:
     return HybridSearch(
         vector_weight=config.get('vector_weight', DEFAULT_CONFIG['vector_weight']),
         keyword_weight=config.get('keyword_weight', DEFAULT_CONFIG['keyword_weight']),
-        rrf_k=config.get('rrf_k', DEFAULT_CONFIG['rrf_k'])
+        rrf_k=config.get('rrf_k', DEFAULT_CONFIG['rrf_k']),
+        bm25_algorithm=config.get('bm25_algorithm', DEFAULT_CONFIG['bm25_algorithm'])
     )

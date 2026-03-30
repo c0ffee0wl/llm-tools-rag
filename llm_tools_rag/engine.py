@@ -8,6 +8,7 @@ from typing import List, Dict, Any, Optional, Tuple
 import chromadb
 from chromadb.config import Settings
 import fcntl
+import json
 import time
 import pickle
 import hashlib
@@ -16,7 +17,7 @@ import hmac
 from .config import RAGConfig, get_rag_config_dir
 from .loaders import DocumentLoader
 from .chunking import RecursiveCharacterTextSplitter, create_splitter_for_file
-from .dedup import Deduplicator
+from .dedup import Deduplicator, NearDeduplicator
 from .search import create_hybrid_searcher
 from .progress import progress_status, print_warning
 
@@ -83,19 +84,25 @@ class RAGEngine:
             settings=Settings(anonymized_telemetry=False)
         )
 
-        # get_or_create_collection silently ignores metadata on existing collections,
-        # so setting hnsw:space here only affects newly created collections.
+        # get_or_create_collection silently ignores configuration on existing collections,
+        # so setting hnsw space here only affects newly created collections.
         self.chroma_collection = self.chroma_client.get_or_create_collection(
             name=collection_name,
-            metadata={"hnsw:space": "cosine"}
+            configuration={"hnsw": {"space": "cosine"}}
         )
 
         # Warn if existing collection uses non-cosine distance
-        coll_meta = self.chroma_collection.metadata or {}
-        if coll_meta.get("hnsw:space", "l2") != "cosine":
+        config_json = getattr(self.chroma_collection, 'configuration_json', None)
+        if config_json:
+            hnsw_space = config_json.get("hnsw", {}).get("space", "l2")
+        else:
+            # Fallback for edge cases (older ChromaDB data)
+            coll_meta = self.chroma_collection.metadata or {}
+            hnsw_space = coll_meta.get("hnsw:space", "l2")
+        if hnsw_space != "cosine":
             print_warning(
                 f"Collection '{collection_name}' uses "
-                f"'{coll_meta.get('hnsw:space', 'l2')}' distance. "
+                f"'{hnsw_space}' distance. "
                 f"Cosine is recommended for text. "
                 f"To migrate: delete and re-add documents."
             )
@@ -103,6 +110,16 @@ class RAGEngine:
         # Initialize components
         self.loader = DocumentLoader(self.config.get_loaders())
         self.deduplicator = Deduplicator()
+
+        # Initialize near-duplicate detector if enabled
+        if self.config.get_near_dedup_enabled():
+            self.near_deduplicator = NearDeduplicator(
+                threshold=self.config.get_near_dedup_threshold(),
+                num_perm=self.config.get_near_dedup_num_perm()
+            )
+        else:
+            self.near_deduplicator = None
+
         self.hybrid_search = create_hybrid_searcher(self.config.to_dict())
 
         # Track BM25 index availability (set to True after successful rebuild)
@@ -221,7 +238,7 @@ class RAGEngine:
             self._release_lock()
 
     def _load_existing_hashes(self):
-        """Load existing document hashes from ChromaDB metadata."""
+        """Load existing document hashes and MinHash signatures from ChromaDB metadata."""
         try:
             # Get all documents to populate deduplicator
             result = self.chroma_collection.get(include=["metadatas"])
@@ -229,6 +246,18 @@ class RAGEngine:
                 for metadata in result["metadatas"]:
                     if metadata and "hash" in metadata:
                         self.deduplicator.add_hash(metadata["hash"])
+                    # Load MinHash signatures for near-duplicate detection
+                    if (self.near_deduplicator and metadata
+                            and "minhash_sig" in metadata and "hash" in metadata):
+                        try:
+                            hashvalues = NearDeduplicator.metadata_to_hashvalues(
+                                metadata["minhash_sig"]
+                            )
+                            self.near_deduplicator.add_from_signature(
+                                metadata["hash"], hashvalues
+                            )
+                        except (json.JSONDecodeError, TypeError, ValueError):
+                            pass  # Skip corrupted signatures
         except Exception as e:
             print_warning(f"Failed to load existing hashes: {e}")
 
@@ -763,19 +792,32 @@ class RAGEngine:
             unique_chunks = []
             chunk_hashes = []
             original_indices = []
+            minhash_sigs = []  # Parallel list of MinHash JSON signatures (or None)
 
             for i, chunk in enumerate(chunks):
-                # Hash the chunk to check if it's duplicate
                 chunk_hash = self.deduplicator.hash_content(chunk)
                 is_duplicate = self.deduplicator.contains_hash(chunk_hash)
 
-                # Add to unique chunks if new or refreshing
-                if not is_duplicate or refresh:
+                # Near-duplicate check + add + serialize in one pass (avoids 3x MinHash cost)
+                is_near_dup = False
+                minhash_sig = None
+                if not is_duplicate and self.near_deduplicator:
+                    if not refresh:
+                        is_near_dup, minhash_sig = self.near_deduplicator.check_add_and_serialize(
+                            chunk, key=chunk_hash
+                        )
+                    else:
+                        # During refresh, skip the near-dup check but still index + serialize
+                        _, minhash_sig = self.near_deduplicator.check_add_and_serialize(
+                            chunk, key=chunk_hash
+                        )
+
+                if (not is_duplicate and not is_near_dup) or refresh:
                     unique_chunks.append(chunk)
                     chunk_hashes.append(chunk_hash)
-                    original_indices.append(i)  # i is always the correct original position
+                    original_indices.append(i)
+                    minhash_sigs.append(minhash_sig)
 
-                # Update deduplicator only for truly new chunks
                 if not is_duplicate:
                     self.deduplicator.add_hash(chunk_hash)
 
@@ -809,10 +851,13 @@ class RAGEngine:
                     "source": path,
                     "hash": chunk_hash,
                     "doc_hash": content_hash,
-                    "chunk_index": original_idx,  # Use original position from document
-                    "bm25_id": str(next_bm25_id + i)  # Store as string for ChromaDB compatibility
+                    "chunk_index": original_idx,
+                    "bm25_id": str(next_bm25_id + i),
+                    **({"minhash_sig": sig} if sig else {})
                 }
-                for i, (chunk_hash, original_idx) in enumerate(zip(chunk_hashes, original_indices))
+                for i, (chunk_hash, original_idx, sig) in enumerate(
+                    zip(chunk_hashes, original_indices, minhash_sigs)
+                )
             ]
 
             # Add to ChromaDB
