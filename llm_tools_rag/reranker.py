@@ -40,14 +40,14 @@ def _get_ranker(model_name: str, max_length: int = 512):
     return _ranker
 
 
-def rerank(
+def rerank_with_scores(
     query: str,
     documents: List[str],
     ids: List[str],
     model_name: str = "ms-marco-MultiBERT-L-12",
     top_k: Optional[int] = None,
     max_length: int = 512
-) -> List[str]:
+) -> List[tuple]:
     """
     Rerank documents using cross-encoder relevance scores.
 
@@ -63,70 +63,19 @@ def rerank(
             - "ms-marco-MiniLM-L-12-v2": ~34MB, best English
             - "ms-marco-MultiBERT-L-12": ~150MB, multilingual (default)
         top_k: Number of top results to return (None = return all)
+        max_length: Max input length in tokens for the cross-encoder
 
     Returns:
-        List of document IDs reordered by relevance score (highest first)
+        List of (doc_id, score) tuples sorted by score (highest first)
 
     Example:
-        >>> ids = rerank(
+        >>> scored = rerank_with_scores(
         ...     query="What is Python?",
         ...     documents=["Python is a snake", "Python is a programming language"],
         ...     ids=["doc1", "doc2"]
         ... )
-        >>> ids[0]  # Most relevant document
+        >>> scored[0][0]  # Most relevant document
         'doc2'
-    """
-    # Validate inputs
-    if not documents:
-        return ids[:top_k] if top_k else ids
-
-    if len(documents) != len(ids):
-        # Mismatch - return original order
-        return ids[:top_k] if top_k else ids
-
-    # Get ranker (lazy-loaded)
-    ranker = _get_ranker(model_name, max_length=max_length)
-
-    # Create passages in FlashRank format
-    from flashrank import RerankRequest
-    passages = [
-        {"id": doc_id, "text": doc_text}
-        for doc_id, doc_text in zip(ids, documents)
-    ]
-
-    # Rerank
-    rerank_request = RerankRequest(query=query, passages=passages)
-    results = ranker.rerank(rerank_request)
-
-    # Extract reordered IDs
-    result_ids = [r["id"] for r in results]
-
-    # Apply top_k limit if specified
-    return result_ids[:top_k] if top_k else result_ids
-
-
-def rerank_with_scores(
-    query: str,
-    documents: List[str],
-    ids: List[str],
-    model_name: str = "ms-marco-MultiBERT-L-12",
-    top_k: Optional[int] = None,
-    max_length: int = 512
-) -> List[tuple]:
-    """
-    Rerank documents and return scores along with IDs.
-
-    Same as rerank() but returns (id, score) tuples for debugging/analysis.
-
-    Args:
-        query: The search query
-        documents: List of document texts to rerank
-        ids: List of document IDs corresponding to documents
-        model_name: FlashRank model name
-        top_k: Number of top results to return (None = return all)
-
-    Returns:
-        List of (doc_id, score) tuples sorted by score (highest first)
     """
     if not documents or len(documents) != len(ids):
         return [(doc_id, 0.0) for doc_id in (ids[:top_k] if top_k else ids)]
@@ -144,3 +93,27 @@ def rerank_with_scores(
 
     scored = [(r["id"], r["score"]) for r in results]
     return scored[:top_k] if top_k else scored
+
+
+def rerank(
+    query: str,
+    documents: List[str],
+    ids: List[str],
+    model_name: str = "ms-marco-MultiBERT-L-12",
+    top_k: Optional[int] = None,
+    max_length: int = 512
+) -> List[str]:
+    """
+    Rerank documents and return only the reordered IDs.
+
+    Convenience wrapper around rerank_with_scores() that discards scores.
+
+    Returns:
+        List of document IDs reordered by relevance score (highest first)
+    """
+    return [
+        doc_id for doc_id, _ in rerank_with_scores(
+            query=query, documents=documents, ids=ids,
+            model_name=model_name, top_k=top_k, max_length=max_length
+        )
+    ]

@@ -29,6 +29,18 @@ class RAGEngine:
     Main RAG engine combining vector and keyword search.
     """
 
+    @staticmethod
+    def _get_model_id(embedding_model) -> Optional[str]:
+        """Extract a stable identifier from an embedding model instance."""
+        if not embedding_model:
+            return None
+        model_id = getattr(embedding_model, 'model_id', None)
+        if not model_id:
+            model_id = getattr(embedding_model, 'name', None)
+        if not model_id:
+            model_id = type(embedding_model).__name__
+        return model_id
+
     def __init__(self, collection_name: str, embedding_model: Optional[str] = None):
         """
         Initialize RAG engine for a collection.
@@ -131,21 +143,9 @@ class RAGEngine:
         collection_metadata = self.chroma_collection.metadata or {}
         stored_model = collection_metadata.get("embedding_model")
 
-        # Get the actual model ID being used (not just what was explicitly specified)
-        # This prevents silent model mismatches when user doesn't specify --model
-        # Try multiple attributes to get a stable identifier
-        actual_model_id = None
-        if self.embedding_model:
-            # Try model_id first (most embedding models have this)
-            actual_model_id = getattr(self.embedding_model, 'model_id', None)
-            # Try 'name' attribute if model_id is not available
-            if not actual_model_id:
-                actual_model_id = getattr(self.embedding_model, 'name', None)
-            # Last resort: use the class name (better than None for detection)
-            if not actual_model_id:
-                actual_model_id = type(self.embedding_model).__name__
-        # Note: Do NOT fall back to model_id variable - it may be None for default models
-        # which would bypass the consistency check
+        # Do NOT fall back to the model_id variable — it may be None for default
+        # models, which would bypass the consistency check.
+        actual_model_id = self._get_model_id(self.embedding_model)
 
         if stored_model and actual_model_id and stored_model != actual_model_id:
             raise ValueError(
@@ -1032,17 +1032,12 @@ class RAGEngine:
                 if bm25_id in self.bm25_to_chroma:
                     final_ids.append(self.bm25_to_chroma[bm25_id])
         else:  # hybrid
-            # Apply query-aware weight adjustment if enabled
+            # Determine weights (query-aware adjustment or defaults)
+            vector_weight = None
+            keyword_weight = None
             if self.config.get_query_aware_weights():
                 from llm_tools_rag.query_analyzer import analyze_query
                 vector_weight, keyword_weight = analyze_query(query)
-                # Temporarily override weights for this search
-                saved_vector_weight = self.hybrid_search.vector_weight
-                saved_keyword_weight = self.hybrid_search.keyword_weight
-                self.hybrid_search.vector_weight = vector_weight
-                self.hybrid_search.keyword_weight = keyword_weight
-            else:
-                saved_vector_weight = None  # Flag to skip restoration
 
             # Convert ChromaDB string IDs to BM25 integer IDs for hybrid search
             vector_bm25_ids = []
@@ -1050,33 +1045,28 @@ class RAGEngine:
                 if chroma_id in self.chroma_to_bm25:
                     vector_bm25_ids.append(self.chroma_to_bm25[chroma_id])
 
-            try:
-                if not vector_bm25_ids:
-                    # Fallback to vector-only if no BM25 mappings exist
-                    final_ids = vector_doc_ids[:top_k]
-                else:
-                    # Perform hybrid search with BM25 IDs
-                    fused_bm25_ids = self.hybrid_search.search(
-                        query=query,
-                        vector_results=vector_bm25_ids,
-                        top_k=top_k,
-                        candidate_count=candidate_count
-                    )
+            if not vector_bm25_ids:
+                # Fallback to vector-only if no BM25 mappings exist
+                final_ids = vector_doc_ids[:top_k]
+            else:
+                fused_bm25_ids = self.hybrid_search.search(
+                    query=query,
+                    vector_results=vector_bm25_ids,
+                    top_k=top_k,
+                    candidate_count=candidate_count,
+                    vector_weight=vector_weight,
+                    keyword_weight=keyword_weight
+                )
 
-                    # Map BM25 IDs back to ChromaDB IDs
-                    final_ids = []
-                    for bm25_id in fused_bm25_ids:
-                        if bm25_id in self.bm25_to_chroma:
-                            final_ids.append(self.bm25_to_chroma[bm25_id])
+                # Map BM25 IDs back to ChromaDB IDs
+                final_ids = []
+                for bm25_id in fused_bm25_ids:
+                    if bm25_id in self.bm25_to_chroma:
+                        final_ids.append(self.bm25_to_chroma[bm25_id])
 
-                    # Filter hybrid results by metadata (BM25 component wasn't filtered)
-                    if filters:
-                        final_ids = self._filter_chroma_ids(final_ids, filters)
-            finally:
-                # Restore original weights if they were modified (always, even on exception)
-                if saved_vector_weight is not None:
-                    self.hybrid_search.vector_weight = saved_vector_weight
-                    self.hybrid_search.keyword_weight = saved_keyword_weight
+                # Filter hybrid results by metadata (BM25 component wasn't filtered)
+                if filters:
+                    final_ids = self._filter_chroma_ids(final_ids, filters)
 
         # Retrieve full documents
         if not final_ids:
@@ -1359,15 +1349,7 @@ class RAGEngine:
             collection_metadata = self.chroma_collection.metadata or {}
             stored_model = collection_metadata.get("embedding_model")
 
-            # Get actual model ID (same logic as __init__)
-            actual_model_id = None
-            if self.embedding_model:
-                actual_model_id = getattr(self.embedding_model, 'model_id', None)
-                if not actual_model_id:
-                    actual_model_id = getattr(self.embedding_model, 'name', None)
-                if not actual_model_id:
-                    actual_model_id = type(self.embedding_model).__name__
-            # Note: Do NOT fall back to model_id variable
+            actual_model_id = self._get_model_id(self.embedding_model)
 
             if stored_model and actual_model_id and stored_model != actual_model_id:
                 raise ValueError(

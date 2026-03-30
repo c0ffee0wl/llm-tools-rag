@@ -324,7 +324,9 @@ class HybridSearch:
         query: str,
         vector_results: List[int],
         top_k: int,
-        candidate_count: Optional[int] = None
+        candidate_count: Optional[int] = None,
+        vector_weight: Optional[float] = None,
+        keyword_weight: Optional[float] = None
     ) -> List[int]:
         """
         Perform hybrid search combining vector and keyword results.
@@ -334,21 +336,23 @@ class HybridSearch:
             vector_results: Pre-computed vector search results (list of doc IDs)
             top_k: Number of final results to return
             candidate_count: Number of BM25 candidates to retrieve (None = top_k * 2)
+            vector_weight: Override vector weight for this search (None = use default)
+            keyword_weight: Override keyword weight for this search (None = use default)
 
         Returns:
             Fused list of document IDs
         """
-        # Get BM25 results
         bm25_results = self.bm25_index.search(query, top_k=candidate_count or top_k * 2)
 
-        # If no BM25 index or results, return vector results only
         if not bm25_results:
             return vector_results[:top_k]
 
-        # Combine using RRF
         fused_results = reciprocal_rank_fusion(
             ranked_lists=[vector_results, bm25_results],
-            weights=[self.vector_weight, self.keyword_weight],
+            weights=[
+                vector_weight if vector_weight is not None else self.vector_weight,
+                keyword_weight if keyword_weight is not None else self.keyword_weight,
+            ],
             rrf_k=self.rrf_k,
             top_k=top_k
         )
