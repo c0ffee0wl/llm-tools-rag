@@ -71,11 +71,22 @@ class RAGEngine:
             settings=Settings(anonymized_telemetry=False)
         )
 
-        # Get or create collection
+        # get_or_create_collection silently ignores metadata on existing collections,
+        # so setting hnsw:space here only affects newly created collections.
         self.chroma_collection = self.chroma_client.get_or_create_collection(
             name=collection_name,
-            metadata={"description": f"RAG collection: {collection_name}"}
+            metadata={"hnsw:space": "cosine"}
         )
+
+        # Warn if existing collection uses non-cosine distance
+        coll_meta = self.chroma_collection.metadata or {}
+        if coll_meta.get("hnsw:space", "l2") != "cosine":
+            print_warning(
+                f"Collection '{collection_name}' uses "
+                f"'{coll_meta.get('hnsw:space', 'l2')}' distance. "
+                f"Cosine is recommended for text. "
+                f"To migrate: delete and re-add documents."
+            )
 
         # Initialize components
         self.loader = DocumentLoader(self.config.get_loaders())
@@ -975,9 +986,10 @@ class RAGEngine:
         # Build where clause for filtering
         where_clause = self._build_where_clause(filters) if filters else None
 
+        candidate_count = self.config.get_retrieval_candidates(top_k)
         vector_results = self.chroma_collection.query(
             query_embeddings=query_embeddings,
-            n_results=top_k * 2,  # Get more for fusion
+            n_results=candidate_count,
             where=where_clause
         )
 
@@ -1010,7 +1022,7 @@ class RAGEngine:
                 final_ids = self._filter_chroma_ids(final_ids, filters)
         elif mode == "keyword":
             # BM25 only - perform pure keyword search
-            keyword_results = self.hybrid_search.bm25_index.search(query, top_k=top_k * 2)
+            keyword_results = self.hybrid_search.bm25_index.search(query, top_k=candidate_count)
             # Filter BM25 results by metadata if filters specified
             if filters:
                 keyword_results = self._filter_bm25_results(keyword_results, filters)
@@ -1047,7 +1059,8 @@ class RAGEngine:
                     fused_bm25_ids = self.hybrid_search.search(
                         query=query,
                         vector_results=vector_bm25_ids,
-                        top_k=top_k
+                        top_k=top_k,
+                        candidate_count=candidate_count
                     )
 
                     # Map BM25 IDs back to ChromaDB IDs
@@ -1122,7 +1135,8 @@ class RAGEngine:
                         documents=docs_to_rerank,
                         ids=valid_ids_for_rerank,
                         model_name=reranker_model,
-                        top_k=reranker_top_k
+                        top_k=reranker_top_k,
+                        max_length=self.config.get_reranker_max_length()
                     )
             except ImportError:
                 # flashrank not installed - skip reranking

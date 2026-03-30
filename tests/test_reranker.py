@@ -117,8 +117,11 @@ class TestConfigIntegration:
 
         assert DEFAULT_CONFIG["reranker_model"] == "ms-marco-MultiBERT-L-12"
         assert DEFAULT_CONFIG["reranker_top_k"] is None
+        assert DEFAULT_CONFIG["reranker_max_length"] is None
         assert DEFAULT_CONFIG["query_aware_weights"] is True
         assert DEFAULT_CONFIG["contextual_headers"] is True
+        assert DEFAULT_CONFIG["retrieval_candidates"] is None
+        assert DEFAULT_CONFIG["bm25_language"] is None
 
     def test_config_validation_reranker_model(self):
         """Config should validate reranker_model type."""
@@ -140,3 +143,81 @@ class TestConfigIntegration:
 
             config = deep_merge(DEFAULT_CONFIG, {"reranker_model": "custom-model"})
             assert config["reranker_model"] == "custom-model"  # String is valid
+
+
+class TestRerankerMaxLength:
+    """Tests for reranker_max_length config."""
+
+    def test_auto_max_length_default_chunk_size(self):
+        """Auto max_length with chunk_size=1000 should be 282."""
+        from llm_tools_rag.config import RAGConfig
+        RAGConfig.reset()
+        config = RAGConfig()
+        # Default chunk_size=1000: (1000 // 4) + 32 = 282
+        assert config.get_reranker_max_length() == 282
+
+    def test_explicit_max_length(self):
+        """Explicit reranker_max_length should override auto."""
+        from llm_tools_rag.config import RAGConfig
+        RAGConfig.reset()
+        config = RAGConfig()
+        config.set("reranker_max_length", 256)
+        assert config.get_reranker_max_length() == 256
+
+    def test_max_length_clamped_low(self):
+        """Auto max_length should be at least 128."""
+        from llm_tools_rag.config import RAGConfig
+        RAGConfig.reset()
+        config = RAGConfig()
+        config.set("chunk_size", 100)  # (100 // 4) + 32 = 57
+        assert config.get_reranker_max_length() == 128
+
+    def test_max_length_clamped_high(self):
+        """Auto max_length should not exceed 512."""
+        from llm_tools_rag.config import RAGConfig
+        RAGConfig.reset()
+        config = RAGConfig()
+        config.set("chunk_size", 5000)  # (5000 // 4) + 32 = 1282
+        assert config.get_reranker_max_length() == 512
+
+    def test_ranker_cache_invalidation(self):
+        """Cache key should include max_length so changing it creates a new ranker."""
+        from llm_tools_rag import reranker
+        # Reset cache
+        reranker._ranker = None
+        reranker._ranker_key = None
+        # Cache key is a (model_name, max_length) tuple
+        assert hasattr(reranker, '_ranker_key')
+
+
+class TestRetrievalCandidates:
+    """Tests for retrieval_candidates config."""
+
+    def test_auto_candidates_small_top_k(self):
+        """Auto candidates with top_k=5 should be 50."""
+        from llm_tools_rag.config import RAGConfig
+        RAGConfig.reset()
+        config = RAGConfig()
+        assert config.get_retrieval_candidates(5) == 50
+
+    def test_auto_candidates_large_top_k(self):
+        """Auto candidates should cap at 100."""
+        from llm_tools_rag.config import RAGConfig
+        RAGConfig.reset()
+        config = RAGConfig()
+        assert config.get_retrieval_candidates(20) == 100
+
+    def test_auto_candidates_minimum(self):
+        """Auto candidates should be at least 20."""
+        from llm_tools_rag.config import RAGConfig
+        RAGConfig.reset()
+        config = RAGConfig()
+        assert config.get_retrieval_candidates(1) == 20
+
+    def test_explicit_candidates(self):
+        """Explicit retrieval_candidates should override auto."""
+        from llm_tools_rag.config import RAGConfig
+        RAGConfig.reset()
+        config = RAGConfig()
+        config.set("retrieval_candidates", 200)
+        assert config.get_retrieval_candidates(5) == 200

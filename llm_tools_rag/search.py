@@ -10,54 +10,140 @@ import re
 
 from llm_tools_rag.config import DEFAULT_CONFIG
 
-# Lazy-loaded stemmer and stopwords (avoid import overhead until first use)
-_stemmer = None
-_stopwords = None
+# Lazy-loaded stemmers and stopwords per language (avoid import overhead until first use)
+_stemmers: Dict[str, Any] = {}
+_stopwords_cache: Dict[str, set] = {}
 
 
-def _get_stemmer():
-    """Get or create Porter stemmer instance (lazy-loaded)."""
-    global _stemmer
-    if _stemmer is None:
-        from nltk.stem import PorterStemmer
-        _stemmer = PorterStemmer()
-    return _stemmer
+def _get_stemmer(language: str = "english"):
+    """Get or create SnowballStemmer instance for the given language (lazy-loaded)."""
+    if language not in _stemmers:
+        from nltk.stem import SnowballStemmer
+        try:
+            _stemmers[language] = SnowballStemmer(language)
+        except ValueError:
+            # Unsupported language — fall back to English
+            _stemmers[language] = _get_stemmer("english")
+    return _stemmers[language]
 
 
-def _get_stopwords():
-    """Get stopwords set (lazy-loaded with automatic download)."""
-    global _stopwords
-    if _stopwords is None:
+def _get_stopwords(language: str = "english"):
+    """Get stopwords set for the given language (lazy-loaded with automatic download)."""
+    if language not in _stopwords_cache:
         try:
             from nltk.corpus import stopwords
-            _stopwords = set(stopwords.words('english'))
+            _stopwords_cache[language] = set(stopwords.words(language))
         except LookupError:
-            # Stopwords not downloaded - download quietly
             import nltk
             nltk.download('stopwords', quiet=True)
-            from nltk.corpus import stopwords
-            _stopwords = set(stopwords.words('english'))
-    return _stopwords
+            try:
+                from nltk.corpus import stopwords
+                _stopwords_cache[language] = set(stopwords.words(language))
+            except Exception:
+                _stopwords_cache[language] = set()
+        except Exception:
+            # Language not available in NLTK stopwords — use empty set
+            # (CJK benefits from natural IDF filtering anyway)
+            _stopwords_cache[language] = set()
+    return _stopwords_cache[language]
 
 
-def tokenize(text: str) -> List[str]:
+def _is_cjk_char(cp: int) -> bool:
+    """Check if a Unicode codepoint is a CJK character."""
+    return (
+        (0x4E00 <= cp <= 0x9FFF)     # CJK Unified Ideographs
+        or (0x3400 <= cp <= 0x4DBF)  # CJK Extension A
+        or (0x20000 <= cp <= 0x2A6DF)  # CJK Extension B
+        or (0xF900 <= cp <= 0xFAFF)  # CJK Compatibility Ideographs
+        or (0x3040 <= cp <= 0x309F)  # Hiragana
+        or (0x30A0 <= cp <= 0x30FF)  # Katakana
+        or (0xAC00 <= cp <= 0xD7A3)  # Hangul Syllables
+    )
+
+
+def _detect_script(text: str) -> str:
+    """Detect dominant script in text. Returns 'cjk' or 'latin'.
+
+    Samples only the first 200 characters to avoid scanning large texts.
+    """
+    cjk_count = 0
+    latin_count = 0
+    for char in text[:200]:
+        cp = ord(char)
+        if _is_cjk_char(cp):
+            cjk_count += 1
+        elif (0x0041 <= cp <= 0x005A or 0x0061 <= cp <= 0x007A
+              or 0x00C0 <= cp <= 0x024F):
+            latin_count += 1
+    if cjk_count > latin_count and cjk_count > 0:
+        return "cjk"
+    return "latin"
+
+
+def _tokenize_cjk(text: str) -> List[str]:
+    """Tokenize text containing CJK characters using Lucene-style bigrams.
+
+    CJK segments get overlapping character unigrams + bigrams.
+    Latin segments get standard word splitting + lowercasing.
+    """
+    tokens = []
+    cjk_chars: List[str] = []
+    latin_buf: List[str] = []
+
+    def flush_cjk():
+        # Emit unigrams + overlapping bigrams (Lucene CJKBigramFilter approach)
+        for i in range(len(cjk_chars)):
+            tokens.append(cjk_chars[i])
+            if i < len(cjk_chars) - 1:
+                tokens.append(cjk_chars[i] + cjk_chars[i + 1])
+        cjk_chars.clear()
+
+    def flush_latin():
+        if latin_buf:
+            word = ''.join(latin_buf).lower()
+            if len(word) > 1:
+                tokens.append(word)
+            latin_buf.clear()
+
+    for char in text:
+        cp = ord(char)
+        if _is_cjk_char(cp):
+            flush_latin()
+            cjk_chars.append(char)
+        elif char.isalnum():
+            if cjk_chars:
+                flush_cjk()
+            latin_buf.append(char)
+        else:
+            if cjk_chars:
+                flush_cjk()
+            flush_latin()
+
+    # Flush remaining
+    flush_cjk()
+    flush_latin()
+    return tokens
+
+
+def tokenize(text: str, language: Optional[str] = None) -> List[str]:
     """
     Tokenize text for BM25 with stemming and stopword removal.
 
-    Uses Porter stemmer for morphological normalization and removes common
-    English stopwords to improve BM25 matching quality.
-
-    Supports international text including Chinese, Japanese, Arabic, etc.
-    (though stemming only applies to English-like tokens).
+    Supports multilingual text:
+    - CJK (Chinese, Japanese, Korean): character unigrams + overlapping bigrams
+    - Latin-script languages: SnowballStemmer (16 languages) + NLTK stopwords
+    - Auto-detects script when language is None
     """
-    # Lowercase and split on word characters with Unicode support
+    if language is None:
+        script = _detect_script(text)
+        if script == "cjk":
+            return _tokenize_cjk(text)
+        language = "english"
+
+    # Latin-script tokenization with stemming and stopword removal
     tokens = re.findall(r'[\w]+', text.lower(), re.UNICODE)
-
-    # Apply stemming and stopword removal
-    stemmer = _get_stemmer()
-    stops = _get_stopwords()
-
-    # Filter short tokens (len > 1) and stopwords, then stem
+    stemmer = _get_stemmer(language)
+    stops = _get_stopwords(language)
     return [stemmer.stem(t) for t in tokens if t not in stops and len(t) > 1]
 
 
@@ -237,7 +323,8 @@ class HybridSearch:
         self,
         query: str,
         vector_results: List[int],
-        top_k: int
+        top_k: int,
+        candidate_count: Optional[int] = None
     ) -> List[int]:
         """
         Perform hybrid search combining vector and keyword results.
@@ -246,12 +333,13 @@ class HybridSearch:
             query: Search query
             vector_results: Pre-computed vector search results (list of doc IDs)
             top_k: Number of final results to return
+            candidate_count: Number of BM25 candidates to retrieve (None = top_k * 2)
 
         Returns:
             Fused list of document IDs
         """
         # Get BM25 results
-        bm25_results = self.bm25_index.search(query, top_k=top_k * 2)
+        bm25_results = self.bm25_index.search(query, top_k=candidate_count or top_k * 2)
 
         # If no BM25 index or results, return vector results only
         if not bm25_results:

@@ -49,7 +49,10 @@ DEFAULT_CONFIG = {
     "diversity_lambda": 1.0,  # MMR: 1.0=relevance-only (disabled), 0.5=balanced, 0.0=diversity-only
     "reranker_model": "ms-marco-MultiBERT-L-12",  # FlashRank multilingual reranker (None to disable)
     "reranker_top_k": None,  # None=use top_k, int=separate limit for reranker output
+    "reranker_max_length": None,  # None=auto-derive from chunk_size, int=explicit token limit
     "query_aware_weights": True,  # Enable dynamic weight adjustment based on query type
+    "retrieval_candidates": None,  # None=auto (min(100, max(20, top_k*10))), int=explicit count
+    "bm25_language": None,  # None=auto-detect per text, str=NLTK language (e.g. "english", "german")
     "contextual_headers": True,  # Prepend source context to chunks before embedding
     "document_loaders": {
         # Git loader: yek with jq transform to aichat format (matches aichat exactly)
@@ -201,6 +204,29 @@ class RAGConfig:
             if not isinstance(reranker_top_k, int) or reranker_top_k <= 0:
                 raise ValueError(f"reranker_top_k must be a positive integer or None, got: {reranker_top_k}")
 
+        # Validate reranker_max_length (positive int in 64-512, or None for auto)
+        reranker_max_length = self._config.get("reranker_max_length")
+        if reranker_max_length is not None:
+            if not isinstance(reranker_max_length, int) or not (64 <= reranker_max_length <= 512):
+                raise ValueError(
+                    f"reranker_max_length must be an integer between 64 and 512, or None for auto, "
+                    f"got: {reranker_max_length}"
+                )
+
+        # Validate retrieval_candidates (positive int >= 2, or None for auto)
+        retrieval_candidates = self._config.get("retrieval_candidates")
+        if retrieval_candidates is not None:
+            if not isinstance(retrieval_candidates, int) or retrieval_candidates < 2:
+                raise ValueError(
+                    f"retrieval_candidates must be an integer >= 2, or None for auto, "
+                    f"got: {retrieval_candidates}"
+                )
+
+        # Validate bm25_language (string or None)
+        bm25_language = self._config.get("bm25_language")
+        if bm25_language is not None and not isinstance(bm25_language, str):
+            raise ValueError(f"bm25_language must be a string or None, got: {type(bm25_language).__name__}")
+
         # Validate query_aware_weights (boolean)
         query_aware_weights = self._config.get("query_aware_weights", True)
         if not isinstance(query_aware_weights, bool):
@@ -263,6 +289,28 @@ class RAGConfig:
     def get_reranker_top_k(self) -> Optional[int]:
         """Get reranker output limit, or None to use top_k."""
         return self._config.get("reranker_top_k", DEFAULT_CONFIG["reranker_top_k"])
+
+    def get_reranker_max_length(self) -> int:
+        """Get reranker max input length in tokens.
+
+        When None (auto), derives from chunk_size: ~4 chars/token for BERT
+        plus 32 tokens for query + special tokens, clamped to 128-512.
+        """
+        val = self._config.get("reranker_max_length")
+        if val is not None:
+            return val
+        return max(128, min(512, (self.get_chunk_size() // 4) + 32))
+
+    def get_retrieval_candidates(self, top_k: int) -> int:
+        """Get number of candidates to retrieve before fusion/reranking.
+
+        When None (auto), uses min(100, max(20, top_k * 10)) to ensure
+        enough candidates for effective RRF fusion.
+        """
+        val = self._config.get("retrieval_candidates")
+        if val is not None:
+            return val
+        return min(100, max(20, top_k * 10))
 
     def get_query_aware_weights(self) -> bool:
         """Get whether query-aware weight adjustment is enabled."""

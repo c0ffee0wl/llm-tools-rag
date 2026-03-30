@@ -3,7 +3,10 @@ Tests for hybrid search functionality.
 """
 
 import pytest
-from llm_tools_rag.search import tokenize, reciprocal_rank_fusion, BM25Index
+from llm_tools_rag.search import (
+    tokenize, reciprocal_rank_fusion, BM25Index,
+    _detect_script, _tokenize_cjk
+)
 
 
 def test_tokenize():
@@ -15,6 +18,97 @@ def test_tokenize():
     assert "test" in tokens
     # Punctuation should be excluded
     assert "," not in tokens
+
+
+def test_tokenize_english_unchanged():
+    """Existing English tokenization behavior should be preserved."""
+    tokens = tokenize("The quick brown fox jumps over the lazy dog")
+    # Stopwords removed ('the', 'over')
+    assert "the" not in tokens
+    # Stemming applied
+    assert "quick" in tokens
+    assert "brown" in tokens
+    assert "fox" in tokens
+
+
+def test_tokenize_explicit_language():
+    """Explicit language parameter should override auto-detection."""
+    tokens = tokenize("Der schnelle braune Fuchs", language="german")
+    # German stopwords like 'der' should be removed
+    assert "der" not in tokens
+    assert len(tokens) > 0
+
+
+def test_detect_script_latin():
+    """Latin text should be detected as latin."""
+    assert _detect_script("Hello world") == "latin"
+    assert _detect_script("Bonjour le monde") == "latin"
+
+
+def test_detect_script_cjk():
+    """CJK text should be detected as CJK."""
+    assert _detect_script("搜索引擎") == "cjk"
+    assert _detect_script("こんにちは") == "cjk"  # Hiragana
+    assert _detect_script("カタカナ") == "cjk"  # Katakana
+    assert _detect_script("한국어") == "cjk"  # Hangul
+
+
+def test_detect_script_mixed():
+    """Mixed text should be classified by dominant script."""
+    # More CJK than Latin
+    assert _detect_script("搜索引擎优化 ok") == "cjk"
+    # More Latin than CJK
+    assert _detect_script("This is a test with one 字") == "latin"
+    # Equal counts — falls through to latin (safe default)
+    assert _detect_script("搜索引擎 test") == "latin"
+
+
+def test_tokenize_cjk_bigrams():
+    """CJK text should produce unigrams + overlapping bigrams."""
+    tokens = _tokenize_cjk("搜索引擎")
+    # Unigrams: 搜, 索, 引, 擎
+    assert "搜" in tokens
+    assert "索" in tokens
+    assert "引" in tokens
+    assert "擎" in tokens
+    # Bigrams: 搜索, 索引, 引擎
+    assert "搜索" in tokens
+    assert "索引" in tokens
+    assert "引擎" in tokens
+
+
+def test_tokenize_cjk_mixed():
+    """Mixed CJK+Latin text should tokenize both parts."""
+    tokens = _tokenize_cjk("Python搜索引擎")
+    # Latin part
+    assert "python" in tokens
+    # CJK unigrams
+    assert "搜" in tokens
+    # CJK bigrams
+    assert "搜索" in tokens
+
+
+def test_tokenize_cjk_autodetect():
+    """Tokenize should auto-detect CJK and use bigram tokenization."""
+    tokens = tokenize("搜索引擎")
+    assert "搜索" in tokens
+    assert "引擎" in tokens
+
+
+def test_bm25_cjk_search():
+    """BM25 index should work with CJK tokenized documents."""
+    index = BM25Index()
+    docs = [
+        (0, "搜索引擎优化"),
+        (1, "数据库管理系统"),
+        (2, "Python programming language"),
+    ]
+    index.add_documents(docs)
+    index.finalize()
+
+    # Search for CJK content
+    results = index.search("搜索引擎", top_k=2)
+    assert 0 in results  # Document about search engines should match
 
 
 def test_rrf_basic():

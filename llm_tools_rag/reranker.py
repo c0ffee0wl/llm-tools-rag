@@ -15,9 +15,9 @@ from typing import List, Optional
 
 from llm_tools_rag.config import get_rag_cache_dir
 
-# Lazy-loaded ranker instance
+# Lazy-loaded ranker instance, keyed by (model_name, max_length)
 _ranker = None
-_ranker_model_name = None
+_ranker_key = None
 
 
 def _get_ranker(model_name: str, max_length: int = 512):
@@ -25,23 +25,17 @@ def _get_ranker(model_name: str, max_length: int = 512):
     Get or create FlashRank Ranker instance (lazy-loaded).
 
     The model is downloaded on first use and cached locally.
-
-    Args:
-        model_name: FlashRank model name (e.g., "ms-marco-MultiBERT-L-12")
-        max_length: Maximum input length for the model
-
-    Returns:
-        FlashRank Ranker instance
+    Recreated when model_name or max_length changes.
     """
-    global _ranker, _ranker_model_name
+    global _ranker, _ranker_key
 
-    if _ranker is None or _ranker_model_name != model_name:
+    key = (model_name, max_length)
+    if _ranker is None or _ranker_key != key:
         from flashrank import Ranker
-        # Use XDG-compatible cache directory for model files
         cache_dir = get_rag_cache_dir() / "flashrank"
         cache_dir.mkdir(parents=True, exist_ok=True)
         _ranker = Ranker(model_name=model_name, cache_dir=str(cache_dir), max_length=max_length)
-        _ranker_model_name = model_name
+        _ranker_key = key
 
     return _ranker
 
@@ -51,7 +45,8 @@ def rerank(
     documents: List[str],
     ids: List[str],
     model_name: str = "ms-marco-MultiBERT-L-12",
-    top_k: Optional[int] = None
+    top_k: Optional[int] = None,
+    max_length: int = 512
 ) -> List[str]:
     """
     Rerank documents using cross-encoder relevance scores.
@@ -90,7 +85,7 @@ def rerank(
         return ids[:top_k] if top_k else ids
 
     # Get ranker (lazy-loaded)
-    ranker = _get_ranker(model_name)
+    ranker = _get_ranker(model_name, max_length=max_length)
 
     # Create passages in FlashRank format
     from flashrank import RerankRequest
@@ -115,7 +110,8 @@ def rerank_with_scores(
     documents: List[str],
     ids: List[str],
     model_name: str = "ms-marco-MultiBERT-L-12",
-    top_k: Optional[int] = None
+    top_k: Optional[int] = None,
+    max_length: int = 512
 ) -> List[tuple]:
     """
     Rerank documents and return scores along with IDs.
@@ -135,7 +131,7 @@ def rerank_with_scores(
     if not documents or len(documents) != len(ids):
         return [(doc_id, 0.0) for doc_id in (ids[:top_k] if top_k else ids)]
 
-    ranker = _get_ranker(model_name)
+    ranker = _get_ranker(model_name, max_length=max_length)
 
     from flashrank import RerankRequest
     passages = [
